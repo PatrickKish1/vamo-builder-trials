@@ -1,0 +1,38 @@
+{
+  "type": "webhook",
+  "name": "generate_code_with_context",
+  "description": "Intelligently generate or modify code based on user's request. This tool analyzes the project context, identifies relevant files, formulates a plan, and generates complete working code. Use this for any code generation task - it will automatically find and update the right files.",
+  "api_schema": {
+    "url": "https://code-easy-gamma.vercel.app/api/webhooks/elevenlabs/code-generation",
+    "method": "POST",
+    "path_params_schema": {},
+    "query_params_schema": {},
+    "request_body_schema": {
+      "type": "object",
+      "properties": {
+        "user_request": {
+          "type": "string",
+          "description": "The user's coding request or task description. Be specific about what code needs to be generated or modified."
+        },
+        "project_id": {
+          "type": "string",
+          "description": "The Appwrite project ID. Use the value from the conversation context or userId."
+        }
+      },
+      "required": ["user_request", "project_id"]
+    },
+    "request_headers": {},
+    "auth_connection": null
+  },
+  "response_timeout_secs": 60,
+  "assignments": [],
+  "disable_interruptions": false,
+  "force_pre_tool_speech": false,
+  "tool_call_sound": null,
+  "tool_call_sound_behavior": "auto",
+  "execution_mode": "immediate",
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {}
+  }
+}
+

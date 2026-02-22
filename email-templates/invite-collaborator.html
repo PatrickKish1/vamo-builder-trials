@@ -1,0 +1,125 @@
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  EmailJS Template: Collaboration Invite                          ║
+  ╠══════════════════════════════════════════════════════════════════╣
+  ║  SUBJECT (paste into EmailJS Subject field):                     ║
+  ║    {{inviter_email}} invited you to collaborate on {{project_name}} ║
+  ║                                                                  ║
+  ║  FROM NAME  : {{inviter_name}}   ← inviter's name or username   ║
+  ║  FROM EMAIL : Use your verified EmailJS sender email             ║
+  ║  REPLY-TO   : {{inviter_email}}  ← so replies go to the inviter ║
+  ║                                                                  ║
+  ║  Template variables:                                             ║
+  ║    {{to_email}}       – recipient email                          ║
+  ║    {{project_name}}   – project they're invited to               ║
+  ║    {{invite_link}}    – full invite URL                          ║
+  ║    {{inviter_email}}  – email of the person sending the invite   ║
+  ║    {{inviter_name}}   – display name of the inviter              ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+<style>
+  /* ── Responsive ─────────────────────────── */
+  @media only screen and (max-width: 620px) {
+    .ec-wrap   { padding: 0 12px 32px !important; }
+    .ec-card   { border-radius: 12px !important; }
+    .ec-body   { padding: 28px 20px !important; }
+    .ec-h1     { font-size: 20px !important; }
+    .ec-btn    { display: block !important; text-align: center !important; }
+  }
+
+  /* ── Dark mode ──────────────────────────── */
+  @media (prefers-color-scheme: dark) {
+    .ec-bg     { background-color: #0a0a0a !important; }
+    .ec-card   { background-color: #141414 !important; border-color: #272727 !important; }
+    .ec-h1     { color: #ffffff !important; }
+    .ec-body-p { color: #a1a1aa !important; }
+    .ec-project-box { background-color: #1c1c1c !important; border-color: #2d2d2d !important; }
+    .ec-project-label { color: #71717a !important; }
+    .ec-project-name { color: #ffffff !important; }
+    .ec-notice { color: #52525b !important; }
+    .ec-logo-name { color: #ffffff !important; }
+    .ec-footer  { color: #52525b !important; }
+    .ec-footer-sub { color: #3f3f46 !important; }
+  }
+</style>
+
+<div class="ec-bg" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Arial, sans-serif; font-size: 16px; background-color: #f4f4f5; margin: 0; padding: 0;">
+  <div class="ec-wrap" style="max-width: 600px; margin: 0 auto; padding: 0 16px 40px;">
+
+    <!-- Header / Logo -->
+    <div style="padding: 32px 0 24px;">
+      <a href="https://code-easy-gamma.vercel.app" target="_blank" style="text-decoration: none; outline: none; display: inline-flex; align-items: center; gap: 10px;">
+        <img
+          src="https://code-easy-gamma.vercel.app/logo.png"
+          alt="Code Easy"
+          width="36"
+          height="36"
+          style="width: 36px; height: 36px; border-radius: 8px; vertical-align: middle; display: inline-block;"
+        />
+        <span class="ec-logo-name" style="font-size: 18px; font-weight: 700; color: #18181b; vertical-align: middle;">Code Easy</span>
+      </a>
+    </div>
+
+    <!-- Card -->
+    <div class="ec-card" style="background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 16px; overflow: hidden;">
+
+      <!-- Accent bar -->
+      <div style="height: 4px; background: linear-gradient(90deg, #7c3aed, #a855f7, #ec4899);"></div>
+
+      <div class="ec-body" style="padding: 36px 40px;">
+
+        <!-- Icon -->
+        <div style="width: 52px; height: 52px; background-color: #f3e8ff; border-radius: 12px; margin-bottom: 24px; display: flex; align-items: center; justify-content: center;">
+          <img
+            src="https://code-easy-gamma.vercel.app/logo.png"
+            alt=""
+            width="30"
+            height="30"
+            style="width: 30px; height: 30px; border-radius: 6px; display: block;"
+          />
+        </div>
+
+        <h1 class="ec-h1" style="margin: 0 0 10px; font-size: 22px; font-weight: 700; color: #18181b; line-height: 1.3;">
+          You've been invited to collaborate
+        </h1>
+
+        <p class="ec-body-p" style="margin: 0 0 24px; font-size: 15px; color: #52525b; line-height: 1.65;">
+          <strong>{{inviter_name}}</strong> ({{inviter_email}}) has invited you to join the project
+          <strong style="color: #7c3aed;">{{project_name}}</strong> on Code Easy.
+        </p>
+
+        <!-- Project card -->
+        <div class="ec-project-box" style="background-color: #faf5ff; border: 1px solid #e9d5ff; border-radius: 10px; padding: 14px 18px; margin-bottom: 28px;">
+          <p class="ec-project-label" style="margin: 0 0 3px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #9333ea;">Project</p>
+          <p class="ec-project-name" style="margin: 0; font-size: 16px; font-weight: 600; color: #18181b;">{{project_name}}</p>
+        </div>
+
+        <!-- CTA button -->
+        <a
+          class="ec-btn"
+          href="{{invite_link}}"
+          target="_blank"
+          style="display: inline-block; text-decoration: none; outline: none; background: linear-gradient(135deg, #7c3aed, #a855f7); color: #ffffff; font-size: 15px; font-weight: 600; padding: 14px 28px; border-radius: 10px; letter-spacing: 0.01em;"
+        >
+          Accept Invitation →
+        </a>
+
+        <p class="ec-notice" style="margin: 22px 0 0; font-size: 13px; color: #71717a; line-height: 1.5;">
+          This invite expires in <strong>7 days</strong>. If you weren't expecting this, you can safely ignore it — your account won't be affected.
+        </p>
+
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding: 24px 0 0; text-align: center;">
+      <p class="ec-footer" style="margin: 0 0 6px; font-size: 13px; color: #71717a;">
+        © 2025 Code Easy. All rights reserved.
+      </p>
+      <p class="ec-footer-sub" style="margin: 0; font-size: 12px; color: #a1a1aa;">
+        You received this because someone invited you to collaborate on a project.
+      </p>
+    </div>
+
+  </div>
+</div>

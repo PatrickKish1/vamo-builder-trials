@@ -1,0 +1,48 @@
+{
+  "name": "backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --max-warnings 0",
+    "db:install-cli": "node -e \"require('child_process').execSync('node scripts/postinstall.js', { cwd: require('path').join(process.cwd(), 'node_modules', 'supabase'), stdio: 'inherit' })\"",
+    "db:link": "node scripts/run-supabase.cjs link",
+    "db:push": "node scripts/run-supabase.cjs db push",
+    "db:push:seed": "node scripts/run-supabase.cjs db push --include-seed",
+    "migration:new": "node scripts/run-supabase.cjs migration new",
+    "db:reset": "node scripts/run-supabase.cjs db reset"
+  },
+  "dependencies": {
+    "@langchain/core": "^0.3.0",
+    "@langchain/groq": "^0.2.0",
+    "@langchain/openai": "^0.3.0",
+    "@supabase/supabase-js": "^2.47.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "e2b": "^2.12.1",
+    "express": "^4.21.0",
+    "uuid": "^11.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9",
+    "@eslint/js": "^9.15.0",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/uuid": "^10.0.0",
+    "eslint": "^9.15.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.15.0",
+    "vitest": "^2.1.6",
+    "supabase": "^2.15.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "type": "webhook",
+  "name": "delete_file",
+  "description": "Delete a file or folder from the project. Use this when the user wants to remove a file or clean up the project structure.",
+  "api_schema": {
+    "url": "https://code-easy-gamma.vercel.app/api/webhooks/elevenlabs",
+    "method": "POST",
+    "path_params_schema": [],
+    "query_params_schema": [],
+    "request_body_schema": {
+      "id": "body",
+      "type": "object",
+      "description": "The request body containing delete action details",
+      "required": true,
+      "properties": [
+        {
+          "id": "action_type",
+          "type": "string",
+          "description": "The action type, always 'delete' for this tool",
+          "dynamic_variable": "",
+          "constant_value": "delete",
+          "value_type": "constant",
+          "required": true
+        },
+        {
+          "id": "file_path",
+          "type": "string",
+          "description": "The file or folder path to delete (e.g., 'src/components/Button.tsx' or 'src/utils/'). If deleting a folder, set is_folder to true.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "value_type": "llm_prompt",
+          "required": true
+        },
+        {
+          "id": "project_id",
+          "type": "string",
+          "description": "The Appwrite project ID",
+          "dynamic_variable": "",
+          "constant_value": "68c9f40a002d5afe6b43",
+          "value_type": "constant",
+          "required": true
+        },
+        {
+          "id": "is_folder",
+          "type": "boolean",
+          "description": "Set to true if deleting a folder, false if deleting a file. Defaults to false if not specified.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "value_type": "llm_prompt",
+          "required": false
+        }
+      ],
+      "dynamic_variable": "",
+      "constant_value": "",
+      "value_type": "llm_prompt"
+    },
+    "request_headers": [],
+    "auth_connection": null
+  },
+  "response_timeout_secs": 20,
+  "assignments": [],
+  "disable_interruptions": false,
+  "force_pre_tool_speech": "auto",
+  "tool_call_sound": null,
+  "tool_call_sound_behavior": "auto",
+  "execution_mode": "immediate",
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {}
+  }
+}

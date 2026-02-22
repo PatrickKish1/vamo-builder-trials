@@ -1,0 +1,126 @@
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  EmailJS Template: OTP / Magic Link / Sign-In Code              ║
+  ╠══════════════════════════════════════════════════════════════════╣
+  ║  SUBJECT (paste into EmailJS Subject field):                     ║
+  ║    Your Code Easy sign-in code: {{otp_code}}                    ║
+  ║                                                                  ║
+  ║  FROM NAME  : Code Easy                                          ║
+  ║  FROM EMAIL : Your verified EmailJS sender (e.g. noreply@…)     ║
+  ║  REPLY-TO   : (leave blank — this is an automated security msg) ║
+  ║                                                                  ║
+  ║  Template variables:                                             ║
+  ║    {{to_name}}    – recipient display name (or "there")          ║
+  ║    {{otp_code}}   – 6-digit OTP code                             ║
+  ║    {{magic_link}} – one-click sign-in URL                        ║
+  ║    {{expires_in}} – e.g. "15 minutes" or "1 hour"               ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+<style>
+  /* ── Responsive ─────────────────────────── */
+  @media only screen and (max-width: 620px) {
+    .ec-wrap      { padding: 0 12px 32px !important; }
+    .ec-card      { border-radius: 12px !important; }
+    .ec-body      { padding: 28px 20px !important; }
+    .ec-h1        { font-size: 20px !important; }
+    .ec-otp       { font-size: 32px !important; letter-spacing: 0.12em !important; }
+    .ec-btn       { display: block !important; text-align: center !important; }
+    .ec-divider-text { font-size: 12px !important; }
+  }
+
+  /* ── Dark mode ──────────────────────────── */
+  @media (prefers-color-scheme: dark) {
+    .ec-bg          { background-color: #0a0a0a !important; }
+    .ec-card        { background-color: #141414 !important; border-color: #272727 !important; }
+    .ec-h1          { color: #ffffff !important; }
+    .ec-lead        { color: #a1a1aa !important; }
+    .ec-otp-box     { background-color: #0f172a !important; border-color: #1e3a8a !important; }
+    .ec-otp-label   { color: #60a5fa !important; }
+    .ec-otp         { color: #ffffff !important; }
+    .ec-divider-text { color: #52525b !important; }
+    .ec-notice-box  { background-color: #1c1c1c !important; border-color: #2563eb !important; }
+    .ec-notice-text { color: #71717a !important; }
+    .ec-logo-name   { color: #ffffff !important; }
+    .ec-footer      { color: #52525b !important; }
+    .ec-footer-sub  { color: #3f3f46 !important; }
+  }
+</style>
+
+<div class="ec-bg" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Arial, sans-serif; font-size: 16px; background-color: #f4f4f5; margin: 0; padding: 0;">
+  <div class="ec-wrap" style="max-width: 600px; margin: 0 auto; padding: 0 16px 40px;">
+
+    <!-- Header / Logo -->
+    <div style="padding: 32px 0 24px;">
+      <a href="https://code-easy-gamma.vercel.app" target="_blank" style="text-decoration: none; outline: none; display: inline-flex; align-items: center; gap: 10px;">
+        <img
+          src="https://code-easy-gamma.vercel.app/logo.png"
+          alt="Code Easy"
+          width="36"
+          height="36"
+          style="width: 36px; height: 36px; border-radius: 8px; vertical-align: middle; display: inline-block;"
+        />
+        <span class="ec-logo-name" style="font-size: 18px; font-weight: 700; color: #18181b; vertical-align: middle;">Code Easy</span>
+      </a>
+    </div>
+
+    <!-- Card -->
+    <div class="ec-card" style="background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 16px; overflow: hidden;">
+
+      <!-- Accent bar -->
+      <div style="height: 4px; background: linear-gradient(90deg, #2563eb, #3b82f6, #60a5fa);"></div>
+
+      <div class="ec-body" style="padding: 36px 40px;">
+
+        <div style="font-size: 36px; margin-bottom: 18px; line-height: 1;">🔐</div>
+
+        <h1 class="ec-h1" style="margin: 0 0 10px; font-size: 22px; font-weight: 700; color: #18181b; line-height: 1.3;">
+          Your sign-in code
+        </h1>
+
+        <p class="ec-lead" style="margin: 0 0 24px; font-size: 15px; color: #52525b; line-height: 1.65;">
+          Hi <strong>{{to_name}}</strong>, here's your Code Easy verification code. It expires in <strong>{{expires_in}}</strong>.
+        </p>
+
+        <!-- OTP code box -->
+        <div class="ec-otp-box" style="background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 24px; margin-bottom: 22px; text-align: center;">
+          <p class="ec-otp-label" style="margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #3b82f6;">Verification code</p>
+          <p class="ec-otp" style="margin: 0; font-size: 40px; font-weight: 800; letter-spacing: 0.22em; color: #1e3a8a; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum';">{{otp_code}}</p>
+        </div>
+
+        <!-- Divider -->
+        <p class="ec-divider-text" style="margin: 0 0 20px; font-size: 13px; color: #a1a1aa; text-align: center;">— or sign in with one click —</p>
+
+        <!-- Magic link CTA -->
+        <div style="text-align: center; margin-bottom: 28px;">
+          <a
+            class="ec-btn"
+            href="{{magic_link}}"
+            target="_blank"
+            style="display: inline-block; text-decoration: none; outline: none; background: linear-gradient(135deg, #2563eb, #3b82f6); color: #ffffff; font-size: 15px; font-weight: 600; padding: 14px 28px; border-radius: 10px; letter-spacing: 0.01em;"
+          >
+            Sign In Now →
+          </a>
+        </div>
+
+        <!-- Security notice -->
+        <div class="ec-notice-box" style="background-color: #f0f9ff; border-left: 3px solid #3b82f6; border-radius: 0 8px 8px 0; padding: 14px 16px;">
+          <p class="ec-notice-text" style="margin: 0; font-size: 13px; color: #64748b; line-height: 1.55;">
+            ⚠️ If you didn't request this code, you can safely ignore this email. Your account hasn't been accessed.
+          </p>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding: 24px 0 0; text-align: center;">
+      <p class="ec-footer" style="margin: 0 0 6px; font-size: 13px; color: #71717a;">
+        © 2025 Code Easy. All rights reserved.
+      </p>
+      <p class="ec-footer-sub" style="margin: 0; font-size: 12px; color: #a1a1aa;">
+        This is an automated security email — please do not reply.
+      </p>
+    </div>
+
+  </div>
+</div>

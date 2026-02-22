@@ -1,0 +1,124 @@
+<!--
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  EmailJS Template: Pineapple Reward Notification                 ║
+  ╠══════════════════════════════════════════════════════════════════╣
+  ║  SUBJECT (paste into EmailJS Subject field):                     ║
+  ║    🍍 You earned {{reward_amount}} Pineapples on Code Easy!     ║
+  ║                                                                  ║
+  ║  FROM NAME  : Code Easy                                          ║
+  ║  FROM EMAIL : Your verified EmailJS sender (e.g. noreply@…)     ║
+  ║  REPLY-TO   : support@codeeasy.app                              ║
+  ║                                                                  ║
+  ║  Template variables:                                             ║
+  ║    {{to_name}}       – recipient display name                    ║
+  ║    {{reward_amount}} – number of pineapples earned               ║
+  ║    {{reward_reason}} – e.g. "completing your first build"        ║
+  ║    {{new_balance}}   – updated total pineapple balance           ║
+  ║    {{wallet_link}}   – link to wallet page                       ║
+  ╚══════════════════════════════════════════════════════════════════╝
+-->
+<style>
+  /* ── Responsive ─────────────────────────── */
+  @media only screen and (max-width: 620px) {
+    .ec-wrap      { padding: 0 12px 32px !important; }
+    .ec-card      { border-radius: 12px !important; }
+    .ec-body      { padding: 28px 20px !important; }
+    .ec-amount    { font-size: 30px !important; }
+    .ec-balance   { font-size: 28px !important; }
+    .ec-btn       { display: block !important; text-align: center !important; padding: 14px 16px !important; }
+  }
+
+  /* ── Dark mode ──────────────────────────── */
+  @media (prefers-color-scheme: dark) {
+    .ec-bg          { background-color: #0a0a0a !important; }
+    .ec-card        { background-color: #141414 !important; border-color: #272727 !important; }
+    .ec-h1          { color: #f59e0b !important; }
+    .ec-subhead     { color: #ffffff !important; }
+    .ec-lead        { color: #a1a1aa !important; }
+    .ec-bal-box     { background-color: #1c1000 !important; border-color: rgba(245,158,11,0.25) !important; }
+    .ec-bal-label   { color: #f59e0b !important; }
+    .ec-bal-val     { color: #ffffff !important; }
+    .ec-logo-name   { color: #ffffff !important; }
+    .ec-footer      { color: #52525b !important; }
+    .ec-footer-sub  { color: #3f3f46 !important; }
+    .ec-footer-link { color: #71717a !important; }
+    .ec-icon-ring   { background-color: #1c1000 !important; border-color: #f59e0b !important; }
+  }
+</style>
+
+<div class="ec-bg" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Arial, sans-serif; font-size: 16px; background-color: #f4f4f5; margin: 0; padding: 0;">
+  <div class="ec-wrap" style="max-width: 600px; margin: 0 auto; padding: 0 16px 40px;">
+
+    <!-- Header / Logo -->
+    <div style="padding: 32px 0 24px;">
+      <a href="https://code-easy-gamma.vercel.app" target="_blank" style="text-decoration: none; outline: none; display: inline-flex; align-items: center; gap: 10px;">
+        <img
+          src="https://code-easy-gamma.vercel.app/logo.png"
+          alt="Code Easy"
+          width="36"
+          height="36"
+          style="width: 36px; height: 36px; border-radius: 8px; vertical-align: middle; display: inline-block;"
+        />
+        <span class="ec-logo-name" style="font-size: 18px; font-weight: 700; color: #18181b; vertical-align: middle;">Code Easy</span>
+      </a>
+    </div>
+
+    <!-- Card -->
+    <div class="ec-card" style="background-color: #ffffff; border: 1px solid #e4e4e7; border-radius: 16px; overflow: hidden;">
+
+      <!-- Accent bar -->
+      <div style="height: 4px; background: linear-gradient(90deg, #f59e0b, #f97316, #ef4444);"></div>
+
+      <div class="ec-body" style="padding: 36px 40px; text-align: center;">
+
+        <!-- Icon ring -->
+        <div class="ec-icon-ring" style="display: inline-flex; align-items: center; justify-content: center; width: 84px; height: 84px; background-color: #fefce8; border: 2px solid #f59e0b; border-radius: 50%; margin-bottom: 20px;">
+          <span style="font-size: 40px; line-height: 1;">🍍</span>
+        </div>
+
+        <h1 class="ec-amount" style="margin: 0 0 6px; font-size: 32px; font-weight: 800; color: #d97706; line-height: 1.2;">
+          +{{reward_amount}} Pineapples!
+        </h1>
+
+        <p class="ec-subhead" style="margin: 0 0 8px; font-size: 17px; font-weight: 600; color: #18181b;">
+          Great work, {{to_name}} 🎉
+        </p>
+
+        <p class="ec-lead" style="margin: 0 0 28px; font-size: 15px; color: #52525b; line-height: 1.65;">
+          You earned this reward for <strong>{{reward_reason}}</strong>. Keep shipping — every milestone brings more Pineapples!
+        </p>
+
+        <!-- Balance display -->
+        <div class="ec-bal-box" style="display: inline-block; background-color: #fefce8; border: 1px solid #fde68a; border-radius: 12px; padding: 18px 32px; margin-bottom: 28px; min-width: 180px;">
+          <p class="ec-bal-label" style="margin: 0 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: #d97706;">New balance</p>
+          <p class="ec-bal-val ec-balance" style="margin: 0; font-size: 34px; font-weight: 800; color: #18181b;">🍍 {{new_balance}}</p>
+        </div>
+
+        <!-- CTA -->
+        <div>
+          <a
+            class="ec-btn"
+            href="{{wallet_link}}"
+            target="_blank"
+            style="display: inline-block; text-decoration: none; outline: none; background: linear-gradient(135deg, #f59e0b, #f97316); color: #ffffff; font-size: 15px; font-weight: 700; padding: 14px 28px; border-radius: 10px; letter-spacing: 0.01em;"
+          >
+            View My Wallet →
+          </a>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding: 24px 0 0; text-align: center;">
+      <p class="ec-footer" style="margin: 0 0 6px; font-size: 13px; color: #71717a;">
+        © 2025 Code Easy. All rights reserved.
+      </p>
+      <p class="ec-footer-sub" style="margin: 0; font-size: 12px; color: #a1a1aa;">
+        You're receiving this because you earned a Pineapple reward.
+        <a class="ec-footer-link" href="{{wallet_link}}" style="color: #a1a1aa; text-decoration: none; outline: none;">Manage preferences</a>
+      </p>
+    </div>
+
+  </div>
+</div>

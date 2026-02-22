@@ -1,0 +1,43 @@
+{
+  "type": "webhook",
+  "name": "get_project_files",
+  "description": "Get a list of all files in the project or read a specific file's content. Use this to understand the existing codebase before making changes. Always check existing files before modifying them to preserve existing code and imports.",
+  "api_schema": {
+    "url": "https://code-easy-gamma.vercel.app/api/files",
+    "method": "GET",
+    "path_params_schema": [],
+    "query_params_schema": [
+      {
+        "id": "projectId",
+        "type": "string",
+        "description": "The Appwrite project ID",
+        "dynamic_variable": "",
+        "constant_value": "68c9f40a002d5afe6b43",
+        "value_type": "constant",
+        "required": true
+      },
+      {
+        "id": "path",
+        "type": "string",
+        "description": "Optional: Specific file path to read. If omitted, returns all files in the project.",
+        "dynamic_variable": "",
+        "constant_value": "",
+        "value_type": "llm_prompt",
+        "required": false
+      }
+    ],
+    "request_body_schema": null,
+    "request_headers": [],
+    "auth_connection": null
+  },
+  "response_timeout_secs": 20,
+  "assignments": [],
+  "disable_interruptions": false,
+  "force_pre_tool_speech": "auto",
+  "tool_call_sound": null,
+  "tool_call_sound_behavior": "auto",
+  "execution_mode": "immediate",
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {}
+  }
+}

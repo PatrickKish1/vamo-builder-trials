@@ -1,0 +1,36 @@
+# Supabase CLI config (for db push, migration new, and optional local dev).
+# See: https://supabase.com/docs/guides/cli/config
+#
+# If you see "supabase: not found", run once (with network):  pnpm run db:install-cli
+# One-time link: from backend/ run  pnpm run db:link  and pick your project + enter DB password.
+# Push migrations (from backend/):  pnpm run db:push  or  node supabase/push.cjs
+#   Migrations are idempotent (DROP POLICY IF EXISTS etc.) so re-run / already-applied is safe.
+# New migration:   pnpm run migration:new -- my_change_name  (creates a timestamped .sql file; add your SQL there).
+
+project_id = "code-easy"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+# Migrations in supabase/migrations/ are applied in filename order (001_..., 002_..., etc.)
+
+[db.seed]
+enabled = false
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:3000"
+
+[studio]
+enabled = true
+port = 54323

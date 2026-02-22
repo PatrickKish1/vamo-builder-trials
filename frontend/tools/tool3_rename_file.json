@@ -1,0 +1,70 @@
+{
+  "type": "webhook",
+  "name": "rename_file",
+  "description": "Rename a file or folder in the project. Use this when the user wants to change a file name or reorganize the project structure.",
+  "api_schema": {
+    "url": "https://code-easy-gamma.vercel.app/api/webhooks/elevenlabs",
+    "method": "POST",
+    "path_params_schema": [],
+    "query_params_schema": [],
+    "request_body_schema": {
+      "id": "body",
+      "type": "object",
+      "description": "The request body containing rename action details",
+      "required": true,
+      "properties": [
+        {
+          "id": "action_type",
+          "type": "string",
+          "description": "The action type, always 'rename' for this tool",
+          "dynamic_variable": "",
+          "constant_value": "rename",
+          "value_type": "constant",
+          "required": true
+        },
+        {
+          "id": "file_path",
+          "type": "string",
+          "description": "The current file or folder path (e.g., 'src/components/OldButton.tsx')",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "value_type": "llm_prompt",
+          "required": true
+        },
+        {
+          "id": "new_path",
+          "type": "string",
+          "description": "The new file or folder path (e.g., 'src/components/NewButton.tsx'). Must include the full path with file extension.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "value_type": "llm_prompt",
+          "required": true
+        },
+        {
+          "id": "project_id",
+          "type": "string",
+          "description": "The Appwrite project ID",
+          "dynamic_variable": "",
+          "constant_value": "68c9f40a002d5afe6b43",
+          "value_type": "constant",
+          "required": true
+        }
+      ],
+      "dynamic_variable": "",
+      "constant_value": "",
+      "value_type": "llm_prompt"
+    },
+    "request_headers": [],
+    "auth_connection": null
+  },
+  "response_timeout_secs": 20,
+  "assignments": [],
+  "disable_interruptions": false,
+  "force_pre_tool_speech": "auto",
+  "tool_call_sound": null,
+  "tool_call_sound_behavior": "auto",
+  "execution_mode": "immediate",
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {}
+  }
+}

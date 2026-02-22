@@ -1,0 +1,79 @@
+{
+  "type": "webhook",
+  "name": "create_or_update_file",
+  "description": "Create a new file or update an existing file in the project. Use this when the user wants to generate new code or modify existing code. Always provide complete, working code in the file_content parameter.",
+  "api_schema": {
+    "url": "https://code-easy-gamma.vercel.app/api/webhooks/elevenlabs",
+    "method": "POST",
+    "path_params_schema": [],
+    "query_params_schema": [],
+    "request_body_schema": {
+      "id": "body",
+      "type": "object",
+      "description": "The request body containing file action details",
+      "required": true,
+      "properties": [
+        {
+          "id": "action_type",
+          "type": "string",
+          "description": "The action to perform. Must be either 'create' for new files or 'update' for existing files.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "value_type": "llm_prompt",
+          "required": true
+        },
+        {
+          "id": "file_path",
+          "type": "string",
+          "description": "The file path relative to project root (e.g., 'src/components/Button.tsx', 'utils/helpers.js'). Always include the full path with file extension.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "value_type": "llm_prompt",
+          "required": true
+        },
+        {
+          "id": "file_content",
+          "type": "string",
+          "description": "The complete file content including all code, imports, and comments. This must be the full, working code - not a snippet or partial code.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "value_type": "llm_prompt",
+          "required": true
+        },
+        {
+          "id": "project_id",
+          "type": "string",
+          "description": "The Appwrite project ID",
+          "dynamic_variable": "",
+          "constant_value": "68c9f40a002d5afe6b43",
+          "value_type": "constant",
+          "required": true
+        },
+        {
+          "id": "description",
+          "type": "string",
+          "description": "Brief description of what the code does (optional)",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "value_type": "llm_prompt",
+          "required": false
+        }
+      ],
+      "dynamic_variable": "",
+      "constant_value": "",
+      "value_type": "llm_prompt"
+    },
+    "request_headers": [],
+    "auth_connection": null
+  },
+  "response_timeout_secs": 30,
+  "assignments": [],
+  "disable_interruptions": false,
+  "force_pre_tool_speech": "auto",
+  "tool_call_sound": null,
+  "tool_call_sound_behavior": "auto",
+  "execution_mode": "immediate",
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {}
+  }
+}
