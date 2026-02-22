@@ -39,3 +39,4 @@ Lovable-style builder where founders iterate on startup UI and business progress
 - **Offers**: “Get Vamo Offer” (progress ≥ 10%) generates AI valuation and stores offer; “List for Sale” (progress ≥ 20%) lists on marketplace.
 
 See `frontend/README.md` and `backend/README.md` for more detail.
+
