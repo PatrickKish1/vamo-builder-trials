@@ -124,6 +124,12 @@ type CallPanelProps = {
   onFilesApplied?: () => void;
   /** When true (view-only collaborator), chat cannot send messages. */
   builderViewOnly?: boolean;
+  /** Builder: initial prompt (project.description) for Chat tab. */
+  builderInitialPrompt?: string | null;
+  /** Builder: last agent summary for Chat tab. */
+  builderAgentSummary?: string | null;
+  /** Builder: project status (scaffolding | ready | error) for Chat tab. */
+  builderStatus?: string;
 };
 
 export function CallPanel({
@@ -148,6 +154,9 @@ export function CallPanel({
   reloadMessagesKey,
   onFilesApplied,
   builderViewOnly = false,
+  builderInitialPrompt,
+  builderAgentSummary,
+  builderStatus,
 }: CallPanelProps) {
   const [orbType, setOrbType] = React.useState("shader");
   const [selectedMic, setSelectedMic] = React.useState<string>("");
@@ -869,6 +878,9 @@ export function CallPanel({
               reloadMessagesKey={reloadMessagesKey}
               onFilesApplied={onFilesApplied}
               builderViewOnly={builderViewOnly}
+              builderInitialPrompt={builderInitialPrompt}
+              builderAgentSummary={builderAgentSummary}
+              builderStatus={builderStatus}
             />
             </div>
           </TabsContent>

@@ -31,6 +31,8 @@ export interface CodeGenerationRequest {
     selectedCode?: string;
     appwriteProjectId?: string;
     projectId?: string;
+    /** Resolved project logo URL (use for app icon, favicon, or header). */
+    projectLogoUrl?: string | null;
   };
 }
 
@@ -261,6 +263,9 @@ Current context:`;
   if (context?.projectFiles?.length) {
     prompt += `\n- Project files: ${context.projectFiles.map((f) => f.path).join(", ")}`;
   }
+  if (context?.projectLogoUrl) {
+    prompt += `\n- Project logo URL (use for app icon, favicon, or header): ${context.projectLogoUrl}`;
+  }
   if (context?.selectedCode) {
     prompt += `\n- Selected code:\n\`\`\`\n${context.selectedCode}\n\`\`\``;
   }
@@ -287,11 +292,15 @@ No code in the chat — only the summary and FILE_PLAN.
 
 **To install packages or add shadcn UI components:** If the user asks to fix "Module not found" for @/components/ui/... or to add dependencies, output a single line before your summary:
 RUN_COMMAND: <full shell command>
-Builder projects run in cloud sandboxes with npm/node pre-installed. Use npm for package management. For one-off CLI tools (e.g. shadcn) use npx.
-Examples: RUN_COMMAND: npx shadcn@latest add button card
-RUN_COMMAND: npm install tailwindcss classnames
-RUN_COMMAND: npm list
-Allowed: npm add|install|run, npx, npm list|why|outdated. Then provide the FILE_PLAN for any code changes needed.`;
+Builder projects run in cloud sandboxes with pnpm. Use pnpm for package management. For one-off CLI tools (e.g. shadcn) use pnpm dlx.
+Examples: RUN_COMMAND: pnpm dlx shadcn@latest add button card
+RUN_COMMAND: pnpm add tailwindcss classnames
+RUN_COMMAND: pnpm list
+Allowed: pnpm add|install|run, pnpm dlx|exec, pnpm list|why|outdated. Then provide the FILE_PLAN for any code changes needed.
+
+**To generate images for the website (hero, illustrations, etc.):** Output a line:
+GENERATE_IMAGE: <description of the image>
+The system will generate the image and return a URL. Use that URL in your FILE_PLAN (e.g. in an img src or next/image). You can output multiple GENERATE_IMAGE lines for multiple images.`;
   }
   return prompt;
 }

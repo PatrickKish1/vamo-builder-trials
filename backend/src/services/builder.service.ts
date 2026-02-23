@@ -1,21 +1,39 @@
 import { randomBytes } from "crypto";
+import archiver from "archiver";
 import { getSupabaseClientWithAuth, getSupabaseServiceClient } from "../config/supabase.js";
 import { env } from "../config/env.js";
 import { AppError, badRequest, dbError, notFound } from "../utils/errors.js";
+import type { Sandbox } from "e2b";
 import {
-  BUILDER_SANDBOX_WORKDIR,
+  BUILDER_SEED_PATH,
   deleteAllProjectFilesFromDb,
   deleteFileFromDb,
   getOrCreateBuilderSandbox,
   getProjectFilesFromDb,
+  getProjectWorkdir,
   killBuilderSandbox,
   listSandboxFilesRecurse,
+  pauseBuilderSandbox as pauseSandboxById,
   persistFilesToDb,
   restoreFilesToSandbox,
   type SandboxFile,
 } from "./builder-sandbox.service.js";
 
 const SCAFFOLD_USER_MESSAGE = "Project setup failed. Please try again.";
+
+/** Log stream tag for E2B command output so we can trace scaffold/preview progress in logs. */
+function commandStreamLogger(tag: string): { onStdout: (data: string) => void; onStderr: (data: string) => void } {
+  return {
+    onStdout: (data: string) => {
+      const line = (data ?? "").trim();
+      if (line) console.log(`[builder][${tag}]`, line);
+    },
+    onStderr: (data: string) => {
+      const line = (data ?? "").trim();
+      if (line) console.warn(`[builder][${tag}]`, line);
+    },
+  };
+}
 
 
 export interface BuilderProjectResponse {
@@ -40,6 +58,8 @@ export interface BuilderProjectResponse {
   updatedAt: string;
   projectRole?: "owner" | "collaborator";
   collaboratorPermission?: "view" | "edit";
+  /** Last agent response (planning, completion summary, or follow-up). Shown on Builder Chat tab. */
+  agentSummary?: string | null;
 }
 
 /** Slim project data for list view - excludes heavy fields like tractionSignals, linkedAssets, recentActivity. */
@@ -114,6 +134,7 @@ function rowToBuilderProject(
     valuationHigh: typeof row.valuation_high === "number" ? row.valuation_high : null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
+    agentSummary: (row.agent_summary as string) ?? null,
   };
 }
 
@@ -283,6 +304,7 @@ export type UpdateBuilderProjectParams = {
   tractionSignals?: Array<{ type: string; description: string; createdAt: string }>;
   recentActivity?: Array<{ type: string; description: string; createdAt: string }>;
   progressScore?: number;
+  agentSummary?: string | null;
 };
 
 export async function updateBuilderProject(
@@ -309,6 +331,7 @@ export async function updateBuilderProject(
   if (params.recentActivity !== undefined) updates.recent_activity = JSON.stringify(params.recentActivity);
   if (params.progressScore !== undefined) updates.progress_score = params.progressScore;
   if (params.logoUrl !== undefined) updates.logo_url = params.logoUrl;
+  if (params.agentSummary !== undefined) updates.agent_summary = params.agentSummary;
 
   const { data, error } = await supabase
     .from("builder_projects")
@@ -345,6 +368,19 @@ export async function deleteBuilderProject(
   return { success: true };
 }
 
+/**
+ * Clear stored sandbox_id for any project that had this E2B sandbox (e.g. after webhook reports killed).
+ * Next time the project is used, a new sandbox will be created.
+ */
+export async function clearSandboxIdBySandboxId(sandboxId: string): Promise<void> {
+  if (!sandboxId?.trim()) return;
+  const supabaseService = getSupabaseServiceClient();
+  await supabaseService
+    .from("builder_projects")
+    .update({ sandbox_id: null, updated_at: new Date().toISOString() })
+    .eq("sandbox_id", sandboxId);
+}
+
 export async function scaffoldProject(
   accessToken: string,
   projectId: string,
@@ -360,23 +396,27 @@ export async function scaffoldProject(
   if (fetchError || !project) throw notFound("Project not found");
 
   const framework = (project.framework as string) ?? "nextjs";
+  const projectName = (project.name as string) ?? "project";
+  const workdir = getProjectWorkdir(projectName);
 
+  // Use pnpm dlx for one-off commands (pnpm equivalent of npx). E2B Node image may need corepack for pnpm.
+  // Scaffold into /home/user/project/{projectName}/frontend so one sandbox can hold multiple projects.
   let scaffoldCommand: string;
   switch (framework) {
     case "nextjs":
-      scaffoldCommand = `npx create-next-app@latest ${BUILDER_SANDBOX_WORKDIR} --typescript --tailwind --eslint --app --src-dir --import-alias "@/*" --yes`;
+      scaffoldCommand = `pnpm dlx create-next-app@latest ${workdir} --typescript --tailwind --eslint --app --src-dir --import-alias "@/*" --use-pnpm --yes`;
       break;
     case "react":
-      scaffoldCommand = `npx create-react-app ${BUILDER_SANDBOX_WORKDIR} --template typescript`;
+      scaffoldCommand = `pnpm dlx create-react-app ${workdir} --template typescript`;
       break;
     case "vue":
-      scaffoldCommand = `npm create vue@latest ${BUILDER_SANDBOX_WORKDIR} -- --typescript --jsx --router --pinia --yes`;
+      scaffoldCommand = `pnpm dlx create-vue@latest ${workdir} -- --typescript --jsx --router --pinia --yes`;
       break;
     case "angular":
-      scaffoldCommand = `npx @angular/cli@latest new project --directory ${BUILDER_SANDBOX_WORKDIR} --routing --style=css --skip-git --package-manager npm`;
+      scaffoldCommand = `pnpm dlx @angular/cli@latest new project --directory ${workdir} --routing --style=css --skip-git --package-manager pnpm`;
       break;
     case "svelte":
-      scaffoldCommand = `npm create svelte@latest ${BUILDER_SANDBOX_WORKDIR} -- --template skeleton --types ts --no-prettier --no-eslint --no-playwright --no-vitest`;
+      scaffoldCommand = `pnpm dlx create-svelte@latest ${workdir} -- --template skeleton --types ts --no-prettier --no-eslint --no-playwright --no-vitest`;
       break;
     default:
       throw badRequest(`Unsupported framework: ${framework}`);
@@ -387,34 +427,290 @@ export async function scaffoldProject(
     .update({ status: "scaffolding", updated_at: new Date().toISOString() })
     .eq("id", projectId);
 
+  const storedSandboxId = (project as Record<string, unknown>).sandbox_id as string | null;
+
   try {
-    const { sandbox, sandboxId } = await getOrCreateBuilderSandbox(projectId, null);
+    console.log("[builder] Creating/connecting to E2B sandbox for scaffold, projectId:", projectId);
+    const { sandbox, sandboxId } = await getOrCreateBuilderSandbox(projectId, storedSandboxId);
+    console.log("[builder] E2B sandbox ready, sandboxId:", sandboxId);
 
     await supabase
       .from("builder_projects")
       .update({ sandbox_id: sandboxId, updated_at: new Date().toISOString() })
       .eq("id", projectId);
 
-    console.log("[builder] Scaffolding project:", projectId, "framework:", framework);
-    const scaffoldResult = await sandbox.commands.run(scaffoldCommand, {
-      timeoutMs: 10 * 60 * 1000,
+    const workdirEntries = (await sandbox.files.list(workdir).catch(() => [])) as Array<{ name: string; type: string }>;
+    const hasPackageJson = workdirEntries.some((e) => e.name === "package.json");
+    const hasNextConfig = workdirEntries.some((e) => e.name === "next.config.ts" || e.name === "next.config.js");
+    const hasSrcOrApp = workdirEntries.some((e) => e.name === "src" || e.name === "app");
+    const projectExistsOnSandbox = hasPackageJson || hasNextConfig || hasSrcOrApp;
+
+    if (projectExistsOnSandbox) {
+      console.log(
+        "[builder] Project already on sandbox (workdir entries:",
+        workdirEntries.length,
+        "package.json:",
+        hasPackageJson,
+        "); recovering, projectId:",
+        projectId
+      );
+      await sandbox.commands.run("corepack enable && corepack prepare pnpm@latest --activate", {
+        timeoutMs: 60_000,
+        cwd: "/home/user",
+      });
+      const componentsJsonPath = `${workdir}/components.json`;
+      const hasShadcn = await sandbox.files.read(componentsJsonPath).catch(() => null);
+      if (typeof hasShadcn !== "string" || !hasShadcn.trim()) {
+        const recoverShadcnLog = commandStreamLogger("recover:shadcn");
+        console.log("[builder] shadcn not found; running shadcn init in workdir");
+        const initResult = await sandbox.commands.run("pnpm dlx shadcn@latest init --yes", {
+          cwd: workdir,
+          timeoutMs: 3 * 60 * 1000,
+          onStdout: recoverShadcnLog.onStdout,
+          onStderr: recoverShadcnLog.onStderr,
+        });
+        if (initResult.exitCode !== 0) {
+          console.warn("[builder] shadcn init non-zero exit:", initResult.exitCode, initResult.stderr?.slice(-300));
+        }
+      }
+      const snapshotFiles: SandboxFile[] = [];
+      await listSandboxFilesRecurse(sandbox, workdir, "", snapshotFiles);
+      const fileCount = snapshotFiles.filter((f) => !f.isFolder).length;
+      if (fileCount === 0) {
+        console.warn("[builder] Recover snapshot had 0 files; retrying after 2s");
+        await new Promise((r) => setTimeout(r, 2000));
+        snapshotFiles.length = 0;
+        await listSandboxFilesRecurse(sandbox, workdir, "", snapshotFiles);
+      }
+      const finalCount = snapshotFiles.filter((f) => !f.isFolder).length;
+      if (finalCount === 0) {
+        console.error("[builder] Recover: no files after snapshot; setting error and returning (will not overwrite existing project)");
+        await supabase
+          .from("builder_projects")
+          .update({ status: "error", updated_at: new Date().toISOString() })
+          .eq("id", projectId);
+        throw new AppError(
+          "Project exists on sandbox but file sync failed. Try re-run scaffold again or contact support.",
+          500,
+          "SCAFFOLD_FAILED"
+        );
+      }
+      await persistFilesToDb(supabaseService, projectId, snapshotFiles);
+      const logoUrlRaw = (project as Record<string, unknown>).logo_url as string | null | undefined;
+      if (logoUrlRaw?.trim()) {
+        const resolvedLogo = await resolveLogoUrl(logoUrlRaw.trim());
+        if (resolvedLogo) await writeProjectLogoAsAppIcon(sandbox, workdir, resolvedLogo);
+      }
+      await supabase
+        .from("builder_projects")
+        .update({ status: "ready", updated_at: new Date().toISOString() })
+        .eq("id", projectId);
+      console.log("[builder] Recover complete for project:", projectId, "files:", finalCount, "status=ready");
+      return { success: true };
+    }
+
+    console.log("[builder] No existing project on sandbox; full scaffold, projectId:", projectId);
+
+    const seedEntries = (await sandbox.files.list(BUILDER_SEED_PATH).catch(() => [])) as Array<{ name: string }>;
+    const seedHasPackageJson = seedEntries.some((e) => e.name === "package.json");
+    if (seedHasPackageJson && env.e2bBuilderTemplateName) {
+      console.log("[builder] Using pre-baked template seed for project:", projectId);
+      const parentDir = workdir.replace(/\/[^/]+$/, "");
+      await sandbox.commands.run(`mkdir -p ${parentDir}`, { timeoutMs: 5000, cwd: "/home/user" });
+      const copyResult = await sandbox.commands.run(`cp -r ${BUILDER_SEED_PATH}/. ${workdir}`, {
+        timeoutMs: 60_000,
+        cwd: "/home/user",
+      });
+      if (copyResult.exitCode !== 0) {
+        console.warn("[builder] Seed copy non-zero exit:", copyResult.exitCode, copyResult.stderr?.slice(-300));
+        throw new AppError("Failed to copy template seed to project. Try again or use scaffold without template.", 500, "SCAFFOLD_FAILED");
+      }
+      console.log("[builder] Snapshot project files to DB for project (from seed):", projectId);
+      const snapshotFiles: SandboxFile[] = [];
+      await listSandboxFilesRecurse(sandbox, workdir, "", snapshotFiles);
+      const fileCount = snapshotFiles.filter((f) => !f.isFolder).length;
+      if (fileCount === 0) {
+        throw new AppError("Template seed produced no files in workdir. Check E2B template.", 500, "SCAFFOLD_FAILED");
+      }
+      await persistFilesToDb(supabaseService, projectId, snapshotFiles);
+      const logoUrlRaw = (project as Record<string, unknown>).logo_url as string | null | undefined;
+      if (logoUrlRaw?.trim()) {
+        const resolvedLogo = await resolveLogoUrl(logoUrlRaw.trim());
+        if (resolvedLogo) await writeProjectLogoAsAppIcon(sandbox, workdir, resolvedLogo);
+      }
+      await supabase
+        .from("builder_projects")
+        .update({ status: "ready", updated_at: new Date().toISOString() })
+        .eq("id", projectId);
+      console.log("[builder] Scaffold complete (from seed) for project:", projectId, "status=ready");
+      return { success: true };
+    }
+
+    await sandbox.commands.run("corepack enable && corepack prepare pnpm@latest --activate", {
+      timeoutMs: 60_000,
+      cwd: "/home/user",
     });
-    if (scaffoldResult.exitCode !== 0) {
-      console.error("[builder] Scaffold failed stdout:", scaffoldResult.stdout?.slice(-2000));
-      console.error("[builder] Scaffold failed stderr:", scaffoldResult.stderr?.slice(-2000));
-      throw new AppError(SCAFFOLD_USER_MESSAGE, 500, "SCAFFOLD_FAILED");
+    const cleanupResult = await sandbox.commands.run(`rm -rf ${workdir}`, {
+      timeoutMs: 30_000,
+      cwd: "/home/user",
+    });
+    if (cleanupResult.exitCode !== 0) {
+      console.warn("[builder] Cleanup workdir non-zero exit:", cleanupResult.exitCode, cleanupResult.stderr?.slice(-500));
+    }
+    const parentDir = workdir.replace(/\/[^/]+$/, "");
+    await sandbox.commands.run(`mkdir -p ${parentDir}`, { timeoutMs: 5000, cwd: "/home/user" });
+
+    const checkScaffoldDone = async (): Promise<boolean> => {
+      const entries = (await sandbox.files.list(workdir).catch(() => [])) as Array<{ name: string }>;
+      return entries.some((e) => e.name === "package.json");
+    };
+
+    const createNextAppLog = commandStreamLogger("scaffold:create-next-app");
+    console.log("[builder] Running create-next-app (background) for project:", projectId);
+    const scaffoldHandle = await sandbox.commands.run(scaffoldCommand, {
+      cwd: "/home/user",
+      background: true,
+      onStdout: createNextAppLog.onStdout,
+      onStderr: createNextAppLog.onStderr,
+    });
+    const scaffoldDeadline = Date.now() + 12 * 60 * 1000;
+    const scaffoldPollMs = 15_000;
+    while (Date.now() < scaffoldDeadline) {
+      await new Promise((r) => setTimeout(r, scaffoldPollMs));
+      if (await checkScaffoldDone()) {
+        console.log("[builder] create-next-app completed (package.json present) for project:", projectId);
+        break;
+      }
+      try {
+        const result = await Promise.race([
+          scaffoldHandle.wait(),
+          new Promise<{ exitCode?: number } | null>((res) => setTimeout(() => res(null), 3000)),
+        ]);
+        if (result != null && result.exitCode !== undefined) {
+          if (result.exitCode !== 0) {
+            const stderr = (scaffoldHandle as { stderr?: string }).stderr ?? "";
+            console.error("[builder] create-next-app exited non-zero:", result.exitCode, stderr?.slice(-500));
+            throw new AppError(
+              `Project setup failed. ${stderr.split("\n").slice(-2).join(" ").slice(0, 180)}`,
+              500,
+              "SCAFFOLD_FAILED"
+            );
+          }
+          break;
+        }
+      } catch (e) {
+        if (e instanceof AppError) throw e;
+      }
+    }
+    if (!(await checkScaffoldDone())) {
+      try {
+        await scaffoldHandle.kill();
+      } catch {
+        /* ignore */
+      }
+      throw new AppError(
+        "Project setup did not complete in time. The sandbox may be under load. Try again in a moment.",
+        500,
+        "SCAFFOLD_FAILED"
+      );
+    }
+
+    if (framework === "nextjs") {
+      const installPollMs = 15_000;
+      const installMaxWaitMs = 8 * 60 * 1000;
+      const scaffoldHasNodeModules = async (): Promise<boolean> => {
+        const list = await sandbox.files.list(`${workdir}/node_modules`).catch(() => []);
+        return Array.isArray(list) && list.length > 0;
+      };
+      const scaffoldPnpmLog = commandStreamLogger("scaffold:pnpm");
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const installCmd = attempt > 1 ? "pnpm install --prefer-offline" : "pnpm install";
+        console.log("[builder] pnpm install (background) in scaffold, attempt", attempt, "for project:", projectId);
+        const installHandle = await sandbox.commands.run(installCmd, {
+          cwd: workdir,
+          background: true,
+          onStdout: scaffoldPnpmLog.onStdout,
+          onStderr: scaffoldPnpmLog.onStderr,
+        });
+        const installDeadline = Date.now() + installMaxWaitMs;
+        while (Date.now() < installDeadline) {
+          await new Promise((r) => setTimeout(r, installPollMs));
+          if (await scaffoldHasNodeModules()) {
+            console.log("[builder] scaffold pnpm install completed for project:", projectId);
+            break;
+          }
+          try {
+            const res = await Promise.race([
+              installHandle.wait(),
+              new Promise<never>((_, rej) => setTimeout(() => rej(new Error("wait_timeout")), 2000)),
+            ]);
+            if (res?.exitCode === 0) break;
+          } catch {
+            /* keep polling */
+          }
+        }
+        if (await scaffoldHasNodeModules()) break;
+        try {
+          await installHandle.kill();
+        } catch {
+          /* ignore */
+        }
+        if (attempt === 2) console.warn("[builder] scaffold pnpm install did not complete; preview start will retry.");
+        else await new Promise((r) => setTimeout(r, 3000));
+      }
+      const shadcnLog = commandStreamLogger("scaffold:shadcn");
+      try {
+        console.log("[builder] shadcn init in scaffold (nextjs) for project:", projectId);
+        const initResult = await sandbox.commands.run("pnpm dlx shadcn@latest init --yes", {
+          cwd: workdir,
+          timeoutMs: 3 * 60 * 1000,
+          onStdout: shadcnLog.onStdout,
+          onStderr: shadcnLog.onStderr,
+        });
+        if (initResult.exitCode !== 0) {
+          console.warn("[builder] shadcn init non-zero exit:", initResult.exitCode, initResult.stderr?.slice(-300));
+        }
+      } catch (shadcnErr) {
+        console.warn("[builder] shadcn init failed (continuing):", shadcnErr instanceof Error ? shadcnErr.message : String(shadcnErr));
+      }
     }
 
     console.log("[builder] Snapshot project files to DB for project:", projectId);
-    const snapshotFiles: SandboxFile[] = [];
-    await listSandboxFilesRecurse(sandbox, BUILDER_SANDBOX_WORKDIR, "", snapshotFiles);
+    let snapshotFiles: SandboxFile[] = [];
+    await listSandboxFilesRecurse(sandbox, workdir, "", snapshotFiles);
+    let fileCount = snapshotFiles.filter((f) => !f.isFolder).length;
+    if (fileCount === 0) {
+      console.warn("[builder] First snapshot had 0 files; retrying after 3s (sandbox may still be writing)");
+      await new Promise((r) => setTimeout(r, 3000));
+      snapshotFiles = [];
+      await listSandboxFilesRecurse(sandbox, workdir, "", snapshotFiles);
+      fileCount = snapshotFiles.filter((f) => !f.isFolder).length;
+    }
+    console.log("[builder] Snapshot collected", snapshotFiles.length, "entries,", fileCount, "files");
+
+    if (fileCount === 0) {
+      console.error("[builder] No files collected from sandbox after retry; workdir:", workdir);
+      await supabase
+        .from("builder_projects")
+        .update({ status: "error", updated_at: new Date().toISOString() })
+        .eq("id", projectId);
+      throw new AppError("Scaffold produced no files. Check E2B sandbox and create-next-app output.", 500, "SCAFFOLD_FAILED");
+    }
+
     await persistFilesToDb(supabaseService, projectId, snapshotFiles);
+
+    const logoUrlRaw = (project as Record<string, unknown>).logo_url as string | null | undefined;
+    if (logoUrlRaw?.trim()) {
+      const resolvedLogo = await resolveLogoUrl(logoUrlRaw.trim());
+      if (resolvedLogo) await writeProjectLogoAsAppIcon(sandbox, workdir, resolvedLogo);
+    }
 
     await supabase
       .from("builder_projects")
       .update({ status: "ready", updated_at: new Date().toISOString() })
       .eq("id", projectId);
 
+    console.log("[builder] Scaffold complete for project:", projectId, "status=ready");
     return { success: true };
   } catch (err) {
     if (err instanceof AppError) throw err;
@@ -423,22 +719,53 @@ export async function scaffoldProject(
       .from("builder_projects")
       .update({ status: "error", updated_at: new Date().toISOString() })
       .eq("id", projectId);
-    throw new AppError(SCAFFOLD_USER_MESSAGE, 500, "SCAFFOLD_FAILED");
+    const resultStdout = (err as { result?: { stdout?: string } }).result?.stdout?.trim().slice(-400) ?? "";
+    const message =
+      err instanceof Error
+        ? err.message.includes("E2B_API_KEY")
+          ? "E2B is not configured. Add E2B_API_KEY to the backend .env (get a key at e2b.dev)."
+          : resultStdout
+            ? resultStdout.split("\n").slice(-4).join(" ").slice(0, 220)
+            : err.message.length <= 200
+              ? err.message
+              : SCAFFOLD_USER_MESSAGE
+        : SCAFFOLD_USER_MESSAGE;
+    throw new AppError(message, 500, "SCAFFOLD_FAILED");
   }
 }
 
+/** Strip E2B/sandbox identifiers from log output so we never expose provider or sandbox id. */
+function sanitizePreviewOutput(raw: string): string {
+  return raw
+    .replace(/\b[a-z0-9]{20,}\.e2b\.app\b/gi, "[preview-host]")
+    .replace(/e2b\.app/gi, "[preview]")
+    .replace(/\bsandbox\s+[a-zA-Z0-9_-]+\s+is\s+running/gi, "sandbox is running")
+    .replace(/"sandboxId"\s*:\s*"[^"]+"/gi, '"sandboxId":"[hidden]"')
+    .replace(/\bsandboxId["\s:]+[a-zA-Z0-9_-]{10,}/gi, "sandboxId: [hidden]")
+    .replace(/\b[a-z0-9]{15,32}\b(?=\s*\.e2b\.|.*port is not open)/gi, "[id]");
+}
+
 export async function getPreviewErrors(
+  accessToken: string,
   projectId: string
 ): Promise<{ output: string; hasErrors: boolean } | null> {
-  const { getSandboxForProject } = await import("./sandbox.service.js");
-  const sandbox = await getSandboxForProject(projectId);
-  if (!sandbox) return null;
+  const supabase = getSupabaseClientWithAuth(accessToken);
+  const { data: project, error } = await supabase
+    .from("builder_projects")
+    .select("sandbox_id")
+    .eq("id", projectId)
+    .single();
+  if (error || !project) return null;
+  const storedSandboxId = (project as Record<string, unknown>).sandbox_id as string | null;
+  if (!storedSandboxId) return null;
   try {
+    const { sandbox } = await getOrCreateBuilderSandbox(projectId, storedSandboxId);
     const content = (await sandbox.files.read("/tmp/dev.log").catch(() => "")) as string;
     if (!content) return null;
     const trimmed = content.slice(-12000);
     const hasErrors = /error|Error|Module not found|Can't resolve|ENOENT|failed|Failed/i.test(trimmed);
-    return { output: trimmed, hasErrors };
+    const sanitized = sanitizePreviewOutput(trimmed);
+    return { output: sanitized, hasErrors };
   } catch {
     return null;
   }
@@ -468,66 +795,206 @@ export async function startPreview(
       .eq("id", projectId);
   }
 
+  const projectName = (project as Record<string, unknown>).name as string ?? "project";
+  const workdir = getProjectWorkdir(projectName);
+
+  /** Run pnpm install in background and poll for node_modules so E2B does not kill a single long-running command. */
+  const runPnpmInstallWithPoll = async (): Promise<void> => {
+    const pollIntervalMs = 15_000;
+    const maxWaitMs = 8 * 60 * 1000;
+    const checkNodeModules = async (): Promise<boolean> => {
+      const list = await sandbox.files.list(`${workdir}/node_modules`).catch(() => []);
+      return Array.isArray(list) && list.length > 0;
+    };
+    const previewPnpmLog = commandStreamLogger("preview:pnpm");
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const installCmd = attempt > 1 ? "pnpm install --prefer-offline" : "pnpm install";
+      console.log("[builder] pnpm install (background) attempt", attempt, "for project:", projectId);
+      const handle = await sandbox.commands.run(installCmd, {
+        cwd: workdir,
+        background: true,
+        onStdout: previewPnpmLog.onStdout,
+        onStderr: previewPnpmLog.onStderr,
+      });
+      const deadline = Date.now() + maxWaitMs;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, pollIntervalMs));
+        if (await checkNodeModules()) {
+          console.log("[builder] pnpm install completed (node_modules present) for project:", projectId);
+          return;
+        }
+        try {
+          const result = await Promise.race([
+            handle.wait(),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error("wait_timeout")), 2000)),
+          ]);
+          if (result?.exitCode === 0) {
+            console.log("[builder] pnpm install process exited 0 for project:", projectId);
+            return;
+          }
+        } catch {
+          /* still running or timeout; keep polling */
+        }
+      }
+      try {
+        await handle.kill?.();
+      } catch {
+        /* ignore */
+      }
+      console.warn("[builder] pnpm install attempt", attempt, "did not complete within", maxWaitMs / 60000, "min");
+      if (attempt === 2) break;
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+    if (await checkNodeModules()) return;
+    throw new AppError(
+      "Dependency install was interrupted in the preview environment. Please try starting the preview again.",
+      503,
+      "PREVIEW_INSTALL_FAILED"
+    );
+  };
+
   if (isNew) {
     const files = await getProjectFilesFromDb(supabaseService, projectId);
     if (files.length === 0) throw notFound("Project has no files. Run scaffold first.");
     console.log("[builder] Restoring", files.length, "files to fresh sandbox for project:", projectId);
-    await restoreFilesToSandbox(sandbox, files);
+    await restoreFilesToSandbox(sandbox, files, workdir);
     console.log("[builder] Installing dependencies in sandbox for project:", projectId);
-    await sandbox.commands.run("npm install", {
-      cwd: BUILDER_SANDBOX_WORKDIR,
-      timeoutMs: 5 * 60 * 1000,
-    });
+    await runPnpmInstallWithPoll();
+  } else {
+    const nodeModulesExists = await sandbox.files.list(`${workdir}/node_modules`).then((e) => (e as unknown[]).length > 0).catch(() => false);
+    if (!nodeModulesExists) {
+      console.log("[builder] node_modules missing in sandbox; running pnpm install for project:", projectId);
+      await runPnpmInstallWithPoll();
+    }
   }
 
   const framework = (project as Record<string, unknown>).framework as string ?? "nextjs";
-  let devCommand: string;
-  switch (framework) {
-    case "nextjs":
-      devCommand = "npm run dev -- -p 3000";
-      break;
-    case "react":
-      devCommand = "PORT=3000 npm start";
-      break;
-    case "vue":
-    case "svelte":
-      devCommand = "npm run dev -- --port 3000 --host 0.0.0.0";
-      break;
-    case "angular":
-      devCommand = "npx ng serve --port 3000 --host 0.0.0.0";
-      break;
-    default:
-      devCommand = "npm run dev -- -p 3000";
+  const buildDevCommand = (port: number): string => {
+    switch (framework) {
+      case "nextjs":
+        return `pnpm run dev -- -p ${port} --hostname 0.0.0.0`;
+      case "react":
+        return `PORT=${port} pnpm start`;
+      case "vue":
+      case "svelte":
+        return `pnpm run dev -- --port ${port} --host 0.0.0.0`;
+      case "angular":
+        return `pnpm exec ng serve --port ${port} --host 0.0.0.0`;
+      default:
+        return `pnpm run dev -- -p ${port} --hostname 0.0.0.0`;
+    }
+  };
+
+  const checkPortListening = async (port: number): Promise<boolean> => {
+    const result = await sandbox.commands.run(
+      `curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 http://127.0.0.1:${port} 2>/dev/null || echo "000"`,
+      { cwd: workdir, timeoutMs: 5000 }
+    );
+    const code = (result.stdout ?? "").trim();
+    return code === "200" || code === "304" || code === "301" || code === "302";
+  };
+
+  const killExistingDev = async (): Promise<void> => {
+    await sandbox.commands.run(
+      "pkill -f 'next dev' || pkill -f 'node.*next' || true; sleep 1",
+      { cwd: workdir, timeoutMs: 10000 }
+    ).catch(() => {});
+  };
+
+  const startPort = (project as Record<string, unknown>).preview_port as number | null;
+  const portsToTry = startPort != null && startPort >= 3000 && startPort <= 3010
+    ? [startPort, ...Array.from({ length: 11 }, (_, i) => 3000 + i).filter((p) => p !== startPort)]
+    : [3000, 3001, 3002, 3003, 3004, 3005];
+
+  let chosenPort = 3000;
+  let serverUp = false;
+
+  await killExistingDev();
+
+  for (const port of portsToTry) {
+    chosenPort = port;
+    const devCommand = buildDevCommand(port);
+    console.log("[builder] Starting dev server in sandbox for project:", projectId, "port:", port);
+    await sandbox.commands.run(
+      `nohup ${devCommand} > /tmp/dev.log 2>&1 &`,
+      { cwd: workdir, timeoutMs: 15000 }
+    );
+    for (let wait = 0; wait < 35; wait += 5) {
+      await new Promise((r) => setTimeout(r, 5000));
+      if (await checkPortListening(port)) {
+        serverUp = true;
+        break;
+      }
+    }
+    if (serverUp) break;
+    await killExistingDev();
   }
 
-  console.log("[builder] Starting dev server in sandbox for project:", projectId);
-  await sandbox.commands.run(
-    `nohup ${devCommand} > /tmp/dev.log 2>&1 &`,
-    { cwd: BUILDER_SANDBOX_WORKDIR, timeoutMs: 15000 }
-  );
+  if (!serverUp) {
+    console.warn("[builder] Dev server did not become ready on any tried port; returning first port for retry");
+  }
 
-  await new Promise((r) => setTimeout(r, 8000));
-
-  const host = sandbox.getHost(3000);
-  const previewUrl = host.startsWith("http") ? host : `https://${host}`;
+  const host = sandbox.getHost(chosenPort);
+  const directUrl = host.startsWith("http") ? host : `https://${host}`;
 
   await supabase
     .from("builder_projects")
     .update({
-      preview_url: previewUrl,
-      preview_port: 3000,
+      preview_url: directUrl,
+      preview_port: chosenPort,
       updated_at: new Date().toISOString(),
     })
     .eq("id", projectId);
 
-  return { previewUrl, previewPort: 3000 };
+  return { previewUrl: directUrl, previewPort: chosenPort };
+}
+
+export const PREVIEW_PROXY_GENERIC_HTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Preview</title></head><body style="font-family:system-ui;padding:2rem;text-align:center;color:#666;"><p>Preview server isn't running.</p><p>Start the preview server from the builder, or try again in a moment.</p></body></html>`;
+
+/**
+ * Proxy a request to the project's preview URL (sandbox). Use this so the client never sees E2B hostnames or sandbox IDs.
+ * On connection error returns 503 with generic HTML (no provider/sandbox details).
+ */
+export async function proxyPreviewRequest(
+  accessToken: string,
+  projectId: string,
+  pathToForward: string
+): Promise<{ status: number; body: string | Buffer; contentType?: string }> {
+  const supabase = getSupabaseClientWithAuth(accessToken);
+  const { data: project, error } = await supabase
+    .from("builder_projects")
+    .select("preview_url")
+    .eq("id", projectId)
+    .single();
+  if (error || !project) throw notFound("Project not found");
+  const baseUrl = (project as Record<string, unknown>).preview_url as string | null;
+  if (!baseUrl?.trim()) {
+    return { status: 503, body: PREVIEW_PROXY_GENERIC_HTML, contentType: "text/html; charset=utf-8" };
+  }
+  const base = baseUrl.replace(/\/$/, "");
+  const path = pathToForward.startsWith("/") ? pathToForward : `/${pathToForward}`;
+  const targetUrl = `${base}${path}`;
+  try {
+    const res = await fetch(targetUrl, {
+      signal: AbortSignal.timeout(15000),
+      headers: { Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+    });
+    if (res.status >= 400) {
+      return { status: 503, body: PREVIEW_PROXY_GENERIC_HTML, contentType: "text/html; charset=utf-8" };
+    }
+    const contentType = res.headers.get("content-type") ?? undefined;
+    const body = await res.arrayBuffer();
+    return { status: res.status, body: Buffer.from(body), contentType: contentType ?? undefined };
+  } catch {
+    return { status: 503, body: PREVIEW_PROXY_GENERIC_HTML, contentType: "text/html; charset=utf-8" };
+  }
 }
 
 const RUN_COMMAND_ALLOWED =
-  /^(pnpm|npm)\s+(add|install|run)\s+[\w\s@./-]+$|^pnpm\s+(dlx|exec)\s+[\w@./\s-]+$|^(pnpm|npm)\s+(list|why|outdated)(\s+[\w@./\s-]*)?$|^npx\s+[\w@./\s-]+$/i;
+  /^pnpm\s+(add|install|run)\s+[\w\s@./-]+$|^pnpm\s+(dlx|exec)\s+[\w@./\s-]+$|^pnpm\s+(list|why|outdated)(\s+[\w@./\s-]*)?$/i;
 const RUN_COMMAND_FORBIDDEN = /[;&|`$<>]|\.\./;
 
-const SHADCN_ADD_PATTERN = /^(pnpm\s+dlx|npx)\s+shadcn@?\w*\s+add\s+/i;
+const SHADCN_ADD_PATTERN = /^pnpm\s+(dlx|exec)\s+shadcn@?\w*\s+add\s+/i;
 
 export async function runProjectCommand(
   accessToken: string,
@@ -539,7 +1006,7 @@ export async function runProjectCommand(
   if (RUN_COMMAND_FORBIDDEN.test(raw)) throw badRequest("Command contains disallowed characters");
   if (!RUN_COMMAND_ALLOWED.test(raw)) {
     throw badRequest(
-      "Allowed: pnpm/npm add|install|run, pnpm dlx|exec, pnpm/npm list|why|outdated, npx"
+      "Allowed: pnpm add|install|run, pnpm dlx|exec, pnpm list|why|outdated"
     );
   }
 
@@ -547,11 +1014,13 @@ export async function runProjectCommand(
   const supabaseService = getSupabaseServiceClient();
   const { data: project, error } = await supabase
     .from("builder_projects")
-    .select("id, sandbox_id")
+    .select("id, sandbox_id, name")
     .eq("id", projectId)
     .single();
   if (error || !project) throw notFound("Project not found");
 
+  const projectName = (project as Record<string, unknown>).name as string ?? "project";
+  const workdir = getProjectWorkdir(projectName);
   const storedSandboxId = (project as Record<string, unknown>).sandbox_id as string | null;
   const { sandbox, sandboxId, isNew } = await getOrCreateBuilderSandbox(projectId, storedSandboxId);
 
@@ -565,9 +1034,9 @@ export async function runProjectCommand(
   if (isNew) {
     const files = await getProjectFilesFromDb(supabaseService, projectId);
     if (files.length > 0) {
-      await restoreFilesToSandbox(sandbox, files);
-      await sandbox.commands.run("npm install", {
-        cwd: BUILDER_SANDBOX_WORKDIR,
+      await restoreFilesToSandbox(sandbox, files, workdir);
+      await sandbox.commands.run("pnpm install", {
+        cwd: workdir,
         timeoutMs: 5 * 60 * 1000,
       });
     }
@@ -575,12 +1044,12 @@ export async function runProjectCommand(
 
   if (SHADCN_ADD_PATTERN.test(raw)) {
     const checkResult = await sandbox.commands.run(
-      `test -f ${BUILDER_SANDBOX_WORKDIR}/components.json && echo "exists" || echo "missing"`,
-      { cwd: BUILDER_SANDBOX_WORKDIR, timeoutMs: 5000 }
+      `test -f ${workdir}/components.json && echo "exists" || echo "missing"`,
+      { cwd: workdir, timeoutMs: 5000 }
     );
     if (checkResult.stdout.trim() === "missing") {
-      const initResult = await sandbox.commands.run("npx shadcn@latest init --yes", {
-        cwd: BUILDER_SANDBOX_WORKDIR,
+      const initResult = await sandbox.commands.run("pnpm dlx shadcn@latest init --yes", {
+        cwd: workdir,
         timeoutMs: 3 * 60 * 1000,
       });
       if (initResult.exitCode !== 0) {
@@ -594,9 +1063,20 @@ export async function runProjectCommand(
   }
 
   const result = await sandbox.commands.run(raw, {
-    cwd: BUILDER_SANDBOX_WORKDIR,
+    cwd: workdir,
     timeoutMs: 5 * 60 * 1000,
   });
+
+  if (result.exitCode === 0) {
+    const syncFiles: SandboxFile[] = [];
+    await listSandboxFilesRecurse(sandbox, workdir, "", syncFiles);
+    const syncCount = syncFiles.filter((f) => !f.isFolder).length;
+    if (syncCount > 0) {
+      await persistFilesToDb(supabaseService, projectId, syncFiles);
+      console.log("[builder] Synced", syncCount, "files from sandbox to DB after run command");
+    }
+  }
+
   return {
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
@@ -630,13 +1110,15 @@ export async function applyBuilderFileAction(
   const supabaseService = getSupabaseServiceClient();
   const { data: project, error } = await supabase
     .from("builder_projects")
-    .select("id, sandbox_id")
+    .select("id, sandbox_id, name")
     .eq("id", projectId)
     .single();
   if (error || !project) throw notFound("Project not found");
 
+  const projectName = (project as Record<string, unknown>).name as string ?? "project";
+  const workdir = getProjectWorkdir(projectName);
   const safePath = sanitizeRelativePath(filePath);
-  const sandboxPath = `${BUILDER_SANDBOX_WORKDIR}/${safePath}`;
+  const sandboxPath = `${workdir}/${safePath}`;
   const storedSandboxId = (project as Record<string, unknown>).sandbox_id as string | null;
 
   if (action === "delete") {
@@ -676,6 +1158,76 @@ export async function listBuilderFiles(
   return { files };
 }
 
+/** Pause the project's E2B sandbox (saves state; resume on next connect). Call when user leaves build page or after inactivity. */
+export async function pauseProjectSandbox(
+  accessToken: string,
+  projectId: string
+): Promise<{ paused: boolean }> {
+  if (!projectId?.trim()) throw badRequest("Project ID is required");
+  const supabase = getSupabaseClientWithAuth(accessToken);
+  const { data: project, error } = await supabase
+    .from("builder_projects")
+    .select("sandbox_id")
+    .eq("id", projectId)
+    .single();
+  if (error || !project) throw notFound("Project not found");
+  const sandboxId = (project as Record<string, unknown>).sandbox_id as string | null;
+  if (!sandboxId?.trim()) return { paused: false };
+  const paused = await pauseSandboxById(sandboxId);
+  return { paused };
+}
+
+/**
+ * Sync project files from E2B sandbox into DB. Use when project is "ready" but DB has no files (e.g. recover didn't persist).
+ * Returns whether we found the project on sandbox and persisted files.
+ */
+export async function syncProjectFromSandbox(
+  accessToken: string,
+  projectId: string
+): Promise<{ success: boolean; fileCount?: number; reason?: "no_sandbox" | "no_project" | "no_files" }> {
+  if (!projectId?.trim()) throw badRequest("Project ID is required");
+  const supabase = getSupabaseClientWithAuth(accessToken);
+  const supabaseService = getSupabaseServiceClient();
+  const { data: project, error } = await supabase
+    .from("builder_projects")
+    .select("id, name, sandbox_id")
+    .eq("id", projectId)
+    .single();
+  if (error || !project) throw notFound("Project not found");
+  const storedSandboxId = (project as Record<string, unknown>).sandbox_id as string | null;
+  if (!storedSandboxId?.trim()) return { success: false, reason: "no_sandbox" };
+
+  const projectName = (project as Record<string, unknown>).name as string ?? "project";
+  const workdir = getProjectWorkdir(projectName);
+
+  try {
+    const { sandbox } = await getOrCreateBuilderSandbox(projectId, storedSandboxId);
+    const workdirEntries = (await sandbox.files.list(workdir).catch(() => [])) as Array<{ name: string; type: string }>;
+    const hasPackageJson = workdirEntries.some((e) => e.name === "package.json");
+    const hasNextConfig = workdirEntries.some((e) => e.name === "next.config.ts" || e.name === "next.config.js");
+    const hasSrcOrApp = workdirEntries.some((e) => e.name === "src" || e.name === "app");
+    if (!hasPackageJson && !hasNextConfig && !hasSrcOrApp) return { success: false, reason: "no_project" };
+
+    const snapshotFiles: SandboxFile[] = [];
+    await listSandboxFilesRecurse(sandbox, workdir, "", snapshotFiles);
+    let fileCount = snapshotFiles.filter((f) => !f.isFolder).length;
+    if (fileCount === 0) {
+      await new Promise((r) => setTimeout(r, 2000));
+      snapshotFiles.length = 0;
+      await listSandboxFilesRecurse(sandbox, workdir, "", snapshotFiles);
+      fileCount = snapshotFiles.filter((f) => !f.isFolder).length;
+    }
+    if (fileCount === 0) return { success: false, reason: "no_files" };
+
+    await persistFilesToDb(supabaseService, projectId, snapshotFiles);
+    console.log("[builder] Sync from sandbox complete for project:", projectId, "files:", fileCount);
+    return { success: true, fileCount };
+  } catch (err) {
+    console.error("[builder] Sync from sandbox failed:", err);
+    return { success: false, reason: "no_files" };
+  }
+}
+
 export async function getBuilderFileContent(
   accessToken: string,
   projectId: string,
@@ -698,6 +1250,32 @@ export async function getBuilderFileContent(
     .eq("path", safePath)
     .maybeSingle();
   return (data as { content: string } | null)?.content ?? null;
+}
+
+/**
+ * Create a ZIP stream of the project files (from DB). Caller should pipe to response with appropriate headers.
+ */
+export async function exportProjectZipStream(
+  accessToken: string,
+  projectId: string
+): Promise<{ stream: NodeJS.ReadableStream; projectName: string }> {
+  const supabase = getSupabaseClientWithAuth(accessToken);
+  const { data: project, error } = await supabase
+    .from("builder_projects")
+    .select("id, name")
+    .eq("id", projectId)
+    .single();
+  if (error || !project) throw notFound("Project not found");
+  const supabaseService = getSupabaseServiceClient();
+  const files = await getProjectFilesFromDb(supabaseService, projectId);
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  for (const f of files) {
+    if (f.isFolder) continue;
+    archive.append(Buffer.from(f.content ?? "", "utf8"), { name: f.path });
+  }
+  void archive.finalize();
+  const projectName = (project.name as string) ?? "project";
+  return { stream: archive, projectName };
 }
 
 const INVITE_TOKEN_BYTES = 24;
@@ -1069,6 +1647,25 @@ async function resolveLogoUrl(logoUrl: string | null): Promise<string | null> {
   }
 }
 
+/** Write project logo as Next.js app icon (src/app/icon.png). Next.js 13+ uses this for the tab icon. */
+async function writeProjectLogoAsAppIcon(
+  sandbox: Sandbox,
+  workdir: string,
+  logoUrl: string
+): Promise<void> {
+  try {
+    const res = await fetch(logoUrl, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength === 0 || buf.byteLength > 2 * 1024 * 1024) return; // cap 2MB
+    const iconPath = `${workdir}/src/app/icon.png`;
+    await sandbox.commands.run(`mkdir -p ${workdir}/src/app`, { timeoutMs: 5000, cwd: "/home/user" }).catch(() => {});
+    await sandbox.files.write([{ path: iconPath, data: buf }]);
+  } catch {
+    // Non-blocking: logo in app is nice-to-have
+  }
+}
+
 /** Try OpenAI DALL-E 2 for logo image. Returns buffer + contentType or null if unavailable. */
 async function generateProjectLogoWithOpenAI(
   projectName: string,
@@ -1121,6 +1718,60 @@ export async function generateProjectLogo(
 
   const logoUrl = `https://image.pollinations.ai/prompt/${encoded}?width=256&height=256&nologo=true&seed=${Date.now() % 99999}`;
   return { logoUrl };
+}
+
+const IMAGE_GEN_MAX_BYTES = 4 * 1024 * 1024; // 4MB for website images
+
+/**
+ * Generate an image for use in a builder project (e.g. hero, illustration). Used by the agent via GENERATE_IMAGE.
+ * Uploads to Supabase storage under projects/{projectId}/generated/{filename}. Returns public/signed URL.
+ */
+export async function generateImageForProject(
+  _accessToken: string,
+  projectId: string,
+  params: { prompt: string; suggestedFilename?: string }
+): Promise<{ url: string }> {
+  const { prompt, suggestedFilename } = params;
+  if (!prompt?.trim()) throw badRequest("Image prompt is required");
+  const bucket = env.supabaseLogoBucket;
+  if (!bucket) throw badRequest("Image generation requires Supabase storage (SUPABASE_STORAGE_BUCKET or SUPABASE_LOGO_BUCKET)");
+
+  const fullPrompt = `${prompt.trim()}, high quality, web suitable, no text overlay`;
+  const encoded = encodeURIComponent(fullPrompt);
+  const pollinationsUrl = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=576&nologo=true&seed=${Date.now() % 99999}`;
+
+  const response = await fetch(pollinationsUrl, {
+    method: "GET",
+    headers: { "User-Agent": "CodeEasyBuilder/1.0 (https://codeeasy.app)" },
+    signal: AbortSignal.timeout(20000),
+  }).catch(() => null);
+
+  if (!response?.ok) {
+    throw new AppError("Image generation request failed. Try again or use a different description.", 502, "IMAGE_GEN_FAILED");
+  }
+  const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+  if (!LOGO_ALLOWED_MIME_TYPES.has(contentType)) {
+    throw new AppError("Image generation returned an unsupported format.", 502, "IMAGE_GEN_FAILED");
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > IMAGE_GEN_MAX_BYTES) {
+    throw new AppError("Generated image too large.", 502, "IMAGE_GEN_FAILED");
+  }
+
+  const ext = contentType === "image/png" ? "png" : "jpg";
+  const safeName = (suggestedFilename ?? "image").replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 60) || "image";
+  const storagePath = `projects/${projectId}/generated/${safeName}.${ext}`;
+  const supabase = getSupabaseServiceClient();
+  const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, buffer, {
+    contentType,
+    upsert: true,
+  });
+  if (uploadError) {
+    console.error("[builder] generateImageForProject upload error:", uploadError);
+    throw new AppError("Failed to save generated image.", 500, "IMAGE_GEN_FAILED");
+  }
+  const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(storagePath);
+  return { url: urlData.publicUrl };
 }
 
 /**
@@ -1417,25 +2068,27 @@ interface GitHubApiRepoResponse {
   message?: string;
 }
 
-async function getOrResumeSandbox(accessToken: string, projectId: string) {
+async function getOrResumeSandbox(accessToken: string, projectId: string): Promise<{ sandbox: Awaited<ReturnType<typeof getOrCreateBuilderSandbox>>["sandbox"]; workdir: string }> {
   const supabase = getSupabaseClientWithAuth(accessToken);
   const supabaseService = getSupabaseServiceClient();
   const { data: project, error } = await supabase
     .from("builder_projects")
-    .select("id, sandbox_id")
+    .select("id, sandbox_id, name")
     .eq("id", projectId)
     .single();
   if (error || !project) throw notFound("Project not found");
 
+  const projectName = (project as Record<string, unknown>).name as string ?? "project";
+  const workdir = getProjectWorkdir(projectName);
   const storedSandboxId = (project as Record<string, unknown>).sandbox_id as string | null;
   const { sandbox, sandboxId, isNew } = await getOrCreateBuilderSandbox(projectId, storedSandboxId);
 
   if (isNew) {
     const files = await getProjectFilesFromDb(supabaseService, projectId);
     if (files.length > 0) {
-      await restoreFilesToSandbox(sandbox, files);
-      await sandbox.commands.run("npm install", {
-        cwd: BUILDER_SANDBOX_WORKDIR,
+      await restoreFilesToSandbox(sandbox, files, workdir);
+      await sandbox.commands.run("pnpm install", {
+        cwd: workdir,
         timeoutMs: 5 * 60 * 1000,
       });
     }
@@ -1446,7 +2099,7 @@ async function getOrResumeSandbox(accessToken: string, projectId: string) {
         .eq("id", projectId);
     }
   }
-  return sandbox;
+  return { sandbox, workdir };
 }
 
 export async function connectGitHub(
@@ -1458,7 +2111,7 @@ export async function connectGitHub(
   if (!githubToken?.trim()) throw badRequest("GitHub token is required");
   if (!repoName?.trim()) throw badRequest("Repository name is required");
 
-  const sandbox = await getOrResumeSandbox(accessToken, projectId);
+  const { sandbox, workdir } = await getOrResumeSandbox(accessToken, projectId);
 
   const userResponse = await fetch("https://api.github.com/user", {
     headers: {
@@ -1491,14 +2144,14 @@ export async function connectGitHub(
   const tokenizedRemote = `https://${githubToken}@github.com/${owner}/${repoName.trim()}.git`;
 
   const gitCommands = [
-    `git -C ${BUILDER_SANDBOX_WORKDIR} init -b main 2>/dev/null || true`,
-    `git -C ${BUILDER_SANDBOX_WORKDIR} config user.email "builder@codeeasy.app"`,
-    `git -C ${BUILDER_SANDBOX_WORKDIR} config user.name "Code Easy Builder"`,
-    `git -C ${BUILDER_SANDBOX_WORKDIR} remote remove origin 2>/dev/null || true`,
-    `git -C ${BUILDER_SANDBOX_WORKDIR} remote add origin ${tokenizedRemote}`,
-    `git -C ${BUILDER_SANDBOX_WORKDIR} add -A`,
-    `git -C ${BUILDER_SANDBOX_WORKDIR} commit -m "Initial commit from Code Easy Builder" --allow-empty`,
-    `git -C ${BUILDER_SANDBOX_WORKDIR} push -u origin main --force`,
+    `git -C ${workdir} init -b main 2>/dev/null || true`,
+    `git -C ${workdir} config user.email "builder@codeeasy.app"`,
+    `git -C ${workdir} config user.name "Code Easy Builder"`,
+    `git -C ${workdir} remote remove origin 2>/dev/null || true`,
+    `git -C ${workdir} remote add origin ${tokenizedRemote}`,
+    `git -C ${workdir} add -A`,
+    `git -C ${workdir} commit -m "Initial commit from Code Easy Builder" --allow-empty`,
+    `git -C ${workdir} push -u origin main --force`,
   ];
   for (const cmd of gitCommands) {
     await sandbox.commands.run(cmd, { timeoutMs: 60000 });
@@ -1514,10 +2167,10 @@ export async function syncToGitHub(
 ): Promise<{ message: string }> {
   if (!githubToken?.trim()) throw badRequest("GitHub token is required");
 
-  const sandbox = await getOrResumeSandbox(accessToken, projectId);
+  const { sandbox, workdir } = await getOrResumeSandbox(accessToken, projectId);
 
   const statusResult = await sandbox.commands.run(
-    `git -C ${BUILDER_SANDBOX_WORKDIR} status --porcelain`,
+    `git -C ${workdir} status --porcelain`,
     { timeoutMs: 10000 }
   );
   if (!statusResult.stdout?.trim()) {
@@ -1525,9 +2178,9 @@ export async function syncToGitHub(
   }
 
   const timestamp = new Date().toISOString();
-  await sandbox.commands.run(`git -C ${BUILDER_SANDBOX_WORKDIR} add -A`, { timeoutMs: 10000 });
-  await sandbox.commands.run(`git -C ${BUILDER_SANDBOX_WORKDIR} commit -m "Auto-sync ${timestamp}"`, { timeoutMs: 10000 });
-  await sandbox.commands.run(`git -C ${BUILDER_SANDBOX_WORKDIR} push origin main`, { timeoutMs: 60000 });
+  await sandbox.commands.run(`git -C ${workdir} add -A`, { timeoutMs: 10000 });
+  await sandbox.commands.run(`git -C ${workdir} commit -m "Auto-sync ${timestamp}"`, { timeoutMs: 10000 });
+  await sandbox.commands.run(`git -C ${workdir} push origin main`, { timeoutMs: 60000 });
 
   return { message: "Changes pushed successfully" };
 }

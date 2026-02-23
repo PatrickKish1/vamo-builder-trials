@@ -6,6 +6,7 @@ import { registerRoutes } from "./routes/index.js";
 import { registerV1Routes } from "./routes/v1/index.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { optionalAuth } from "./middleware/auth.js";
+import * as webhooksController from "./controllers/webhooks.controller.js";
 
 export function createApp(): express.Application {
   const app = express();
@@ -21,6 +22,14 @@ export function createApp(): express.Application {
     })
   );
   app.use(cookieParser());
+  // E2B webhook needs raw body for signature verification; mount before express.json()
+  app.use(
+    "/api/v1/webhooks/e2b",
+    express.raw({ type: "application/json" }),
+    (req, res, next) => {
+      webhooksController.e2bLifecycleWebhook(req, res).catch(next);
+    }
+  );
   app.use(express.json({ limit: "10mb" }));
 
   // Request logging: log method, path, and response status so backend console is visible

@@ -15,13 +15,15 @@
     "db:push": "node scripts/run-supabase.cjs db push",
     "db:push:seed": "node scripts/run-supabase.cjs db push --include-seed",
     "migration:new": "node scripts/run-supabase.cjs migration new",
-    "db:reset": "node scripts/run-supabase.cjs db reset"
+    "db:reset": "node scripts/run-supabase.cjs db reset",
+    "build:e2b-template": "tsx scripts/build-e2b-template.ts"
   },
   "dependencies": {
     "@langchain/core": "^0.3.0",
     "@langchain/groq": "^0.2.0",
     "@langchain/openai": "^0.3.0",
     "@supabase/supabase-js": "^2.47.0",
+    "archiver": "^7.0.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
@@ -31,6 +33,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
+    "@types/archiver": "^7.0.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",

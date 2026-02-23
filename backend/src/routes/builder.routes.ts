@@ -55,6 +55,19 @@ builderRouter.post("/projects/:projectId/run-command", (req, res, next) => {
 builderRouter.get("/files", (req, res, next) => {
   builderController.listFiles(req, res).catch(next);
 });
+builderRouter.post("/projects/:projectId/pause", (req, res, next) => {
+  builderController.pauseSandbox(req, res).catch(next);
+});
+builderRouter.post("/projects/:projectId/sync-from-sandbox", (req, res, next) => {
+  builderController.syncFromSandbox(req, res).catch(next);
+});
+builderRouter.use("/projects/:projectId/preview-proxy", (req, res, next) => {
+  if (req.method !== "GET") return next();
+  builderController.proxyPreview(req, res).catch(next);
+});
+builderRouter.get("/projects/:projectId/export", (req, res, next) => {
+  builderController.exportZip(req, res).catch(next);
+});
 builderRouter.post("/files", (req, res, next) => {
   builderController.applyFile(req, res).catch(next);
 });
@@ -102,4 +115,7 @@ builderRouter.post("/projects/:projectId/publish/vercel", (req, res, next) => {
 });
 builderRouter.post("/projects/:projectId/offer", (req, res, next) => {
   builderController.getInstantOffer(req, res).catch(next);
+});
+builderRouter.get("/projects/:projectId/export", (req, res, next) => {
+  builderController.exportProject(req, res).catch(next);
 });

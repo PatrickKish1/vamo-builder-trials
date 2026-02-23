@@ -60,6 +60,15 @@ export const env = {
   get e2bApiKey(): string | undefined {
     return getEnvOptional("E2B_API_KEY");
   },
+  /** Custom E2B template name for builder sandboxes (e.g. code-easy-nextjs). When set, new sandboxes use this template so create-next-app and pnpm install are pre-baked. Build once with: pnpm exec tsx scripts/build-e2b-template.ts */
+  get e2bBuilderTemplateName(): string | undefined {
+    const v = getEnvOptional("E2B_BUILDER_TEMPLATE_NAME");
+    return typeof v === "string" && v.trim() ? v.trim() : undefined;
+  },
+  /** Secret used to verify E2B webhook signatures (same value as when registering the webhook). Optional. */
+  get e2bWebhookSignatureSecret(): string | undefined {
+    return getEnvOptional("E2B_WEBHOOK_SIGNATURE_SECRET");
+  },
   /** Supabase Storage bucket name for project logos (private bucket; use signed URLs). 5MB max, image/jpeg, image/jpg, image/png. Set SUPABASE_STORAGE_BUCKET or SUPABASE_LOGO_BUCKET. */
   get supabaseLogoBucket(): string | undefined {
     const a = getEnvOptional("SUPABASE_STORAGE_BUCKET");

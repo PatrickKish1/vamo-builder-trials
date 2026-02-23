@@ -135,7 +135,7 @@ export default function BuilderJoinPage() {
           </div>
         )}
       </div>
-      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
+      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} onSuccess={() => setLoginOpen(false)} />
     </div>
   );
 }

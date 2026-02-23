@@ -36,7 +36,6 @@ import { apiV1, authFetch } from "@/lib/api";
 import { getAuthUrl } from "@/lib/auth-redirect";
 import { cn } from "@/lib/utils";
 import { reportCrash } from "@/lib/crashReporter";
-import JSZip from "jszip";
 
 type BuilderProjectItem = { id: string; name: string; framework: string; status: string };
 
@@ -127,6 +126,7 @@ export default function BuilderBuildPage() {
     framework: string;
     status: string;
     description?: string | null;
+    agentSummary?: string | null;
     logoUrl?: string | null;
     progressScore?: number;
     tractionSignals?: Array<{ type: string; description: string; createdAt: string }>;
@@ -174,6 +174,9 @@ export default function BuilderBuildPage() {
   const [logoModalOpen, setLogoModalOpen] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [chatReloadKey, setChatReloadKey] = useState(0);
+  const [reScaffolding, setReScaffolding] = useState(false);
+  /** When project is ready but DB has 0 files, we sync from sandbox once. 'idle' | 'syncing' | 'done' | 'failed' */
+  const [previewSyncStatus, setPreviewSyncStatus] = useState<"idle" | "syncing" | "done" | "failed">("idle");
   const [offerDialogOpen, setOfferDialogOpen] = useState(false);
   const [offerLoading, setOfferLoading] = useState(false);
   const [offerData, setOfferData] = useState<{
@@ -351,6 +354,21 @@ export default function BuilderBuildPage() {
     }
   }, [chatCollapsed, leftPanelTab, portalTarget]);
 
+  const syncFromSandboxAttemptedRef = useRef(false);
+  // When switching projects (sidebar or URL), clear previous project state so we don't show the wrong project
+  useEffect(() => {
+    if (!projectId) return;
+    setProject(null);
+    setFiles([]);
+    setPreviewUrl(null);
+    setPreviewRunning(false);
+    setLoading(true);
+    setPreviewSyncStatus("idle");
+    syncFromSandboxAttemptedRef.current = false;
+    scaffoldStartedRef.current = false;
+    builderPromptSentRef.current = false;
+  }, [projectId]);
+
   useEffect(() => {
     if (authLoading) return;
     if (!sessionToken) {
@@ -367,15 +385,26 @@ export default function BuilderBuildPage() {
     if (!project || project.status !== "scaffolding" || !effectiveAuth || !projectId || scaffoldStartedRef.current) return;
     scaffoldStartedRef.current = true;
     const description = typeof window !== "undefined" ? sessionStorage.getItem("builder_prompt") ?? "" : "";
-    authFetch(apiV1("/builder/scaffold"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ projectId, description }),
-    }, sessionToken ?? null).catch(() => {
-      scaffoldStartedRef.current = false;
-    });
-  }, [project?.status, projectId, sessionToken, effectiveAuth]);
+    void (async () => {
+      try {
+        const res = await authFetch(apiV1("/builder/scaffold"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ projectId, description }),
+        }, sessionToken ?? null);
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string };
+          toast.error(body.error ?? "Project setup failed. Please try again.");
+          scaffoldStartedRef.current = false;
+          void loadProject(true);
+        }
+      } catch {
+        scaffoldStartedRef.current = false;
+        void loadProject(true);
+      }
+    })();
+  }, [project?.status, projectId, sessionToken, effectiveAuth, loadProject]);
 
   // Poll project when preview is not running so we pick up server start (e.g. from another tab or after refresh)
   useEffect(() => {
@@ -396,7 +425,15 @@ export default function BuilderBuildPage() {
         }, sessionToken ?? null);
         if (!response.ok) return;
         const data = (await response.json()) as { output?: string; hasErrors?: boolean };
-        if (data.hasErrors && data.output?.trim()) setPreviewError(data.output.trim());
+        if (data.hasErrors && data.output?.trim()) {
+          const raw = data.output.trim();
+          const safe = raw
+            .replace(/"sandboxId"\s*:\s*"[^"]+"/gi, '"sandboxId":"[hidden]"')
+            .replace(/\bsandboxId["\s:]+[a-zA-Z0-9_-]{10,}/gi, "sandboxId: [hidden]")
+            .replace(/\b[a-z0-9]{15,32}\.e2b\.app\b/gi, "[preview]")
+            .replace(/\be2b\.app\b/gi, "[preview]");
+          setPreviewError(safe);
+        }
       } catch {
         /* ignore */
       }
@@ -422,7 +459,7 @@ export default function BuilderBuildPage() {
 
     try {
       toast.info("Starting preview server...");
-      
+
       const response = await authFetch(apiV1("/builder/preview/start"), {
         method: "POST",
         headers: {
@@ -446,6 +483,32 @@ export default function BuilderBuildPage() {
       toast.error(message);
     }
   };
+
+  const handleReScaffold = useCallback(async () => {
+    if (!sessionToken || !projectId || reScaffolding) return;
+    setReScaffolding(true);
+    try {
+      const response = await authFetch(apiV1("/builder/scaffold"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ projectId }),
+      }, sessionToken);
+      if (!response.ok) {
+        const errBody = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(errBody.error ?? "Scaffold failed");
+      }
+      toast.success("Re-running project setup…");
+      scaffoldStartedRef.current = false;
+      await loadProject(true);
+      await loadFiles();
+    } catch (error) {
+      console.error("Re-scaffold error:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to re-run scaffold");
+    } finally {
+      setReScaffolding(false);
+    }
+  }, [sessionToken, projectId, reScaffolding, loadProject, loadFiles]);
 
   const handleCodeAction = async (action: { type: string; path: string; content?: string }) => {
     if (!sessionToken || !projectId) return;
@@ -481,18 +544,38 @@ export default function BuilderBuildPage() {
     }
   };
 
+  const handlePauseSandbox = useCallback(async () => {
+    if (!projectId || !sessionToken) return;
+    try {
+      const res = await authFetch(
+        apiV1(`/builder/projects/${projectId}/pause`),
+        { method: "POST", credentials: "include" },
+        sessionToken
+      );
+      const data = (await res.json()) as { paused?: boolean };
+      if (data.paused) toast.success("Sandbox paused. It will resume when you open the project again.");
+      else toast.info("No active sandbox to pause.");
+    } catch {
+      toast.error("Failed to pause sandbox.");
+    }
+  }, [projectId, sessionToken]);
+
   const handleExportZip = useCallback(async () => {
-    const fileList = files.filter((f): f is { path: string; content: string } => !f.isFolder && typeof f.content === "string");
-    if (fileList.length === 0) {
-      toast.error("No files to export");
+    if (!sessionToken || !projectId) {
+      toast.error("Sign in and open a project to export");
       return;
     }
     try {
-      const zip = new JSZip();
-      for (const f of fileList) {
-        zip.file(f.path, f.content ?? "");
+      const response = await authFetch(
+        apiV1(`/builder/projects/${projectId}/export`),
+        { method: "GET" },
+        sessionToken
+      );
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? "Export failed");
       }
-      const blob = await zip.generateAsync({ type: "blob" });
+      const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -502,9 +585,9 @@ export default function BuilderBuildPage() {
       toast.success("Project exported as ZIP");
     } catch (error) {
       console.error("Export failed:", error);
-      toast.error("Failed to export project");
+      toast.error(error instanceof Error ? error.message : "Failed to export project");
     }
-  }, [files, project?.name]);
+  }, [sessionToken, projectId, project?.name]);
 
   const handleReward = useCallback((amount: number, newBalance: number) => {
     setPineappleBalance(newBalance);
@@ -518,10 +601,14 @@ export default function BuilderBuildPage() {
     if (builderPromptSentRef.current) return;
     const savedPrompt =
       typeof window !== "undefined" ? sessionStorage.getItem("builder_prompt") ?? "" : "";
-    if (!savedPrompt.trim() || !sessionToken || !projectId) return;
+    if (!sessionToken || !projectId) return;
 
     builderPromptSentRef.current = true;
-    sessionStorage.removeItem("builder_prompt");
+    if (savedPrompt.trim()) sessionStorage.removeItem("builder_prompt");
+    if (!savedPrompt.trim()) {
+      toast.info("Project ready. Open Builder Chat to add instructions and generate code.");
+      return;
+    }
 
     try {
       const headers: HeadersInit = {
@@ -659,6 +746,54 @@ export default function BuilderBuildPage() {
     setLeftPanelTab,
     loadFiles,
   ]);
+
+  // When project is ready but DB has no files, sync from sandbox once so we can show code and Start Preview
+  useEffect(() => {
+    if (
+      !sessionToken ||
+      !projectId ||
+      loading ||
+      !project ||
+      project.status !== "ready" ||
+      files.length > 0 ||
+      previewSyncStatus !== "idle" ||
+      syncFromSandboxAttemptedRef.current
+    )
+      return;
+    syncFromSandboxAttemptedRef.current = true;
+    setPreviewSyncStatus("syncing");
+    (async () => {
+      try {
+        const res = await authFetch(
+          apiV1(`/builder/projects/${projectId}/sync-from-sandbox`),
+          { method: "POST", credentials: "include" },
+          sessionToken
+        );
+        const data = (await res.json()) as { success?: boolean };
+        if (data.success) {
+          await loadFiles();
+          setPreviewSyncStatus("done");
+        } else {
+          setPreviewSyncStatus("failed");
+        }
+      } catch {
+        setPreviewSyncStatus("failed");
+      }
+    })();
+  }, [loading, project, projectId, sessionToken, files.length, previewSyncStatus, loadFiles]);
+
+  // Pause sandbox when user leaves the build page (resume automatically on next open)
+  useEffect(() => {
+    return () => {
+      if (projectId && sessionToken) {
+        authFetch(
+          apiV1(`/builder/projects/${projectId}/pause`),
+          { method: "POST", credentials: "include", keepalive: true },
+          sessionToken
+        ).catch(() => {});
+      }
+    };
+  }, [projectId, sessionToken]);
 
   // Poll while scaffolding until ready or error; when ready, load files and send builder prompt to agent
   useEffect(() => {
@@ -886,7 +1021,10 @@ export default function BuilderBuildPage() {
       <div className="h-screen w-screen flex flex-col bg-background">
         <BuilderCodeView
           files={files}
-          onBack={() => setViewMode("main")}
+          onBack={() => {
+            setLeftPanelTab("projects");
+            setViewMode("main");
+          }}
           projectName={project.name}
           projectId={projectId}
           sessionToken={sessionToken}
@@ -1039,8 +1177,8 @@ export default function BuilderBuildPage() {
             <span className="hidden sm:inline text-xs">Code</span>
           </Button>
 
-          {previewRunning && previewUrl ? (
-            <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={() => window.open(previewUrl, "_blank")}>
+          {previewRunning && previewUrl && projectId ? (
+            <Button variant="outline" size="sm" className="gap-1.5 h-8" onClick={() => window.open(apiV1(`/builder/projects/${projectId}/preview-proxy/`), "_blank", "noopener,noreferrer")}>
               <Play className="h-3.5 w-3.5" aria-hidden />
               <span className="hidden sm:inline text-xs">Preview</span>
             </Button>
@@ -1063,6 +1201,12 @@ export default function BuilderBuildPage() {
                 <Download className="mr-2 h-4 w-4" aria-hidden />
                 Export ZIP
               </DropdownMenuItem>
+              {!isViewOnlyCollaborator && (
+                <DropdownMenuItem onClick={() => void handlePauseSandbox()}>
+                  <PanelRightClose className="mr-2 h-4 w-4" aria-hidden />
+                  Pause sandbox
+                </DropdownMenuItem>
+              )}
               {!isViewOnlyCollaborator && project?.status !== "listed" && (
                 <DropdownMenuItem
                   onClick={() => void handleListForSale()}
@@ -1218,12 +1362,12 @@ export default function BuilderBuildPage() {
             <TabsContent value="preview" className="flex-1 flex flex-col min-h-0 m-0 data-[state=inactive]:hidden">
               <div className="border-b px-3 py-1.5 bg-muted/30 shrink-0 flex items-center justify-between gap-2">
                 <h2 className="text-xs font-medium text-muted-foreground">Preview</h2>
-                {previewRunning && previewUrl && (
+                {previewRunning && previewUrl && projectId && !previewError && (
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-7 text-xs"
-                    onClick={() => window.open(previewUrl ?? undefined, "_blank", "noopener,noreferrer")}
+                    onClick={() => window.open(apiV1(`/builder/projects/${projectId}/preview-proxy/`), "_blank", "noopener,noreferrer")}
                     aria-label="Open preview in new tab"
                   >
                     Open in new tab
@@ -1257,30 +1401,79 @@ export default function BuilderBuildPage() {
                       <p className="text-sm text-muted-foreground">This may take a minute. You can use chat and analytics while you wait.</p>
                     </div>
                   </div>
-                ) : previewRunning && previewUrl ? (
+                ) : loading || previewSyncStatus === "syncing" ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-6" aria-live="polite" aria-busy="true">
+                    <div className="relative">
+                      <Loader2 className="h-14 w-14 animate-spin text-primary" aria-hidden />
+                      <div className="absolute inset-0 h-14 w-14 rounded-full border-2 border-primary/30 border-t-primary animate-spin" aria-hidden />
+                    </div>
+                    <div className="text-center space-y-1">
+                      <p className="font-medium text-foreground">
+                        {previewSyncStatus === "syncing" ? "Syncing project from sandbox…" : "Running checks…"}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {previewSyncStatus === "syncing"
+                          ? "Getting project files. Almost there."
+                          : "Verifying project on sandbox. Getting it done."}
+                      </p>
+                    </div>
+                  </div>
+                ) : previewRunning && previewUrl && projectId && !previewError ? (
                   <iframe
-                    src={previewUrl}
+                    src={apiV1(`/builder/projects/${projectId}/preview-proxy/`)}
                     className="w-full h-full border-0"
                     title="App Preview"
                     sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
                   />
-                ) : project.status === "error" ? (
+                ) : (project.status === "ready" && (files.length > 0 || previewSyncStatus === "done")) || (previewRunning && previewError) ? (
                   <div className="flex flex-col items-center justify-center h-full gap-4">
-                    <Code className="h-12 w-12 text-muted-foreground" aria-hidden />
-                    <p className="text-muted-foreground text-sm">Project setup failed.</p>
-                    <Button variant="outline" size="sm" onClick={() => router.push("/builder")}>
-                      Back to Builder
+                    <Code className="h-12 w-12 mx-auto text-muted-foreground" aria-hidden />
+                    <p className="text-muted-foreground text-sm">
+                      {previewError ? "Preview server didn’t start (build error above). Fix the error, then start the preview again." : "No preview running"}
+                    </p>
+                    <Button onClick={handleStartPreview} size="sm">
+                      <Play className="h-4 w-4 mr-2" />
+                      Start Preview Server
                     </Button>
                   </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center space-y-4">
-                      <Code className="h-12 w-12 mx-auto text-muted-foreground" aria-hidden />
-                      <p className="text-muted-foreground text-sm">No preview available</p>
-                      <Button onClick={handleStartPreview} size="sm">
-                        <Play className="h-4 w-4 mr-2" />
-                        Start Preview Server
+                ) : project.status === "error" || previewSyncStatus === "failed" ? (
+                  <div className="flex flex-col items-center justify-center h-full gap-4">
+                    <Code className="h-12 w-12 text-muted-foreground" aria-hidden />
+                    <p className="text-muted-foreground text-sm">
+                      {previewSyncStatus === "failed"
+                        ? "Project not found on sandbox or files could not be synced."
+                        : "Project setup failed."}
+                    </p>
+                    <p className="text-muted-foreground text-xs max-w-sm text-center">
+                      Re-run scaffold to set up or regenerate the project in the E2B sandbox.
+                    </p>
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => void handleReScaffold()}
+                        disabled={reScaffolding}
+                      >
+                        {reScaffolding ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" aria-hidden />
+                        ) : (
+                          <RefreshCw className="h-4 w-4 mr-2" aria-hidden />
+                        )}
+                        Re-run scaffold
                       </Button>
+                      <Button variant="outline" size="sm" onClick={() => router.push("/builder")}>
+                        Back to Builder
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full gap-6" aria-live="polite" aria-busy="true">
+                    <div className="relative">
+                      <Loader2 className="h-14 w-14 animate-spin text-primary" aria-hidden />
+                      <div className="absolute inset-0 h-14 w-14 rounded-full border-2 border-primary/30 border-t-primary animate-spin" aria-hidden />
+                    </div>
+                    <div className="text-center space-y-1">
+                      <p className="font-medium text-foreground">Verifying project…</p>
+                      <p className="text-sm text-muted-foreground">Getting project status and files.</p>
                     </div>
                   </div>
                 )}
@@ -1332,6 +1525,9 @@ export default function BuilderBuildPage() {
             reloadMessagesKey={chatReloadKey}
             onFilesApplied={loadFiles}
             builderViewOnly={isViewOnlyCollaborator}
+            builderInitialPrompt={project?.description ?? null}
+            builderAgentSummary={project?.agentSummary ?? null}
+            builderStatus={project?.status}
           />,
           portalTarget
         )}

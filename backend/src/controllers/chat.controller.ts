@@ -56,13 +56,78 @@ export async function postChat(req: Request, res: Response): Promise<void> {
   const projectId =
     typeof body.projectId === "string" && body.projectId ? body.projectId : null;
 
+  let context = { ...body.context, projectId: projectId ?? body.context?.projectId } as chatService.CodeGenerationRequest["context"];
+  // Index project files for the agent when projectId is set but context didn't include projectFiles (E2B/LangChain pattern: agent needs read/list of project files; we use DB as source of truth, writes sync to E2B sandbox via applyBuilderFileAction).
+  if (projectId && token) {
+    try {
+      if (!context?.projectFiles?.length) {
+        const { files } = await builderService.listBuilderFiles(token, projectId);
+        const MAX_FILES = 40;
+        const MAX_CONTENT_PER_FILE = 60 * 1024;
+        const MAX_TOTAL_CONTEXT = 4 * 1024 * 1024;
+        const raw = files.filter((f) => !f.isFolder && typeof f.path === "string");
+        let total = 0;
+        const limited: Array<{ path: string; content: string }> = [];
+        for (const f of raw) {
+          if (limited.length >= MAX_FILES || total >= MAX_TOTAL_CONTEXT) break;
+          let content = f.content ?? "";
+          if (content.length > MAX_CONTENT_PER_FILE) content = content.slice(0, MAX_CONTENT_PER_FILE) + "\n\n/* ... truncated */";
+          const size = f.path.length + content.length;
+          if (total + size > MAX_TOTAL_CONTEXT && limited.length > 0) break;
+          total += size;
+          limited.push({ path: f.path, content });
+        }
+        context = { ...context, projectFiles: limited };
+      }
+      const { project } = await builderService.listBuilderProjects(token, projectId, null);
+      if (project?.logoUrl) context = { ...context, projectLogoUrl: project.logoUrl };
+    } catch (err) {
+      console.warn("[chat] Failed to index project files for context:", err);
+    }
+  }
+
+  if (projectId && (!context?.projectFiles?.length)) {
+    res.status(400).json({
+      error: "Project files could not be loaded. Ensure the project has been set up (run scaffold) and try again.",
+      code: "NO_PROJECT_FILES",
+    });
+    return;
+  }
+
   console.log("[chat] POST / prompt length:", body.prompt?.length ?? 0, "threadId:", threadId, "projectId:", projectId ?? "none");
   const response = await chatService.generateCode({
     threadId,
     prompt: body.prompt,
     model: body.model,
-    context: { ...body.context, projectId: projectId ?? body.context?.projectId },
+    context,
   });
+
+  const generateImageRegex = /^\s*GENERATE_IMAGE:\s*(.+)$/gim;
+  const imagePrompts: string[] = [];
+  let imgMatch: RegExpExecArray | null;
+  while ((imgMatch = generateImageRegex.exec(response.message)) !== null) {
+    const prompt = imgMatch[1].trim();
+    if (prompt) imagePrompts.push(prompt);
+  }
+  const generatedImageUrls: string[] = [];
+  if (imagePrompts.length && projectId && token) {
+    for (let i = 0; i < imagePrompts.length; i++) {
+      try {
+        const { url } = await builderService.generateImageForProject(token, projectId, {
+          prompt: imagePrompts[i],
+          suggestedFilename: `generated-${i + 1}`,
+        });
+        generatedImageUrls.push(url);
+      } catch (err) {
+        console.error("[chat] GENERATE_IMAGE failed:", imagePrompts[i], err);
+      }
+    }
+    (response as unknown as Record<string, unknown>).generatedImageUrls = generatedImageUrls;
+    if (generatedImageUrls.length > 0) {
+      const imageBlock = `\n\nGenerated image(s) for use in your app:\n${generatedImageUrls.map((u) => `- ${u}`).join("\n")}`;
+      (response as unknown as Record<string, string>).message = (response.message ?? "") + imageBlock;
+    }
+  }
 
   const runCommandRegex = /^\s*RUN_COMMAND:\s*(.+)$/gim;
   const runCommands: string[] = [];
@@ -150,6 +215,13 @@ export async function postChat(req: Request, res: Response): Promise<void> {
       const withoutCodeBlocks = response.message.replace(/```[\s\S]*?```/g, "").replace(/\n{3,}/g, "\n\n").trim();
       if (withoutCodeBlocks) (response as unknown as Record<string, string>).message = withoutCodeBlocks;
     }
+  }
+
+  if (projectId && token && response.message?.trim()) {
+    const summary = response.message.trim().slice(0, 8000);
+    builderService.updateBuilderProject(token, projectId, { agentSummary: summary }).catch((err) => {
+      console.warn("[chat] Failed to update project agent_summary:", err);
+    });
   }
 
   const idempotencyKey =

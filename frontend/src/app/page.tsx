@@ -799,7 +799,7 @@ export default function Home() {
           }
         }}
       />
-      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} />
+      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} onSuccess={() => setLoginDialogOpen(false)} />
       <CreateProjectModal
         open={createProjectModalOpen}
         onOpenChange={setCreateProjectModalOpen}

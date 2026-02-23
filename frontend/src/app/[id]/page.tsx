@@ -1112,7 +1112,7 @@ export default function ProjectPage() {
           }
         }}
       />
-      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} />
+      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} onSuccess={() => setLoginDialogOpen(false)} />
       <CreateProjectModal
         open={createProjectModalOpen}
         onOpenChange={setCreateProjectModalOpen}

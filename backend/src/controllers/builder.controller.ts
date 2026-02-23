@@ -86,6 +86,7 @@ export async function updateBuilderProject(req: Request, res: Response): Promise
     tractionSignals?: Array<{ type: string; description: string; createdAt: string }>;
     recentActivity?: Array<{ type: string; description: string; createdAt: string }>;
     progressScore?: number;
+    agentSummary?: string | null;
   };
   const projectId = body?.projectId;
   if (!projectId) {
@@ -102,6 +103,7 @@ export async function updateBuilderProject(req: Request, res: Response): Promise
     tractionSignals: body.tractionSignals,
     recentActivity: body.recentActivity,
     progressScore: body.progressScore,
+    agentSummary: body.agentSummary,
   });
   res.json(result);
 }
@@ -177,7 +179,7 @@ export async function getPreviewErrors(req: Request, res: Response): Promise<voi
     res.status(400).json({ error: "projectId is required" });
     return;
   }
-  const errors = await builderService.getPreviewErrors(projectId);
+  const errors = await builderService.getPreviewErrors(token, projectId);
   if (!errors) {
     res.json({ output: "", hasErrors: false });
     return;
@@ -209,6 +211,73 @@ export async function listFiles(req: Request, res: Response): Promise<void> {
   console.log("[builder] GET /files projectId:", projectId);
   const result = await builderService.listBuilderFiles(token, projectId);
   res.json(result);
+}
+
+export async function pauseSandbox(req: Request, res: Response): Promise<void> {
+  const token = getAccessToken(req);
+  if (!token) throw unauthorized("Authentication required");
+  const projectId = getProjectIdParam(req);
+  if (!projectId) {
+    res.status(400).json({ error: "projectId is required" });
+    return;
+  }
+  const result = await builderService.pauseProjectSandbox(token, projectId);
+  res.json(result);
+}
+
+export async function syncFromSandbox(req: Request, res: Response): Promise<void> {
+  const token = getAccessToken(req);
+  if (!token) throw unauthorized("Authentication required");
+  const projectId = getProjectIdParam(req);
+  if (!projectId) {
+    res.status(400).json({ error: "projectId is required" });
+    return;
+  }
+  const result = await builderService.syncProjectFromSandbox(token, projectId);
+  res.json(result);
+}
+
+export async function proxyPreview(req: Request, res: Response): Promise<void> {
+  const token = getAccessToken(req);
+  if (!token) throw unauthorized("Authentication required");
+  const projectId = getProjectIdParam(req);
+  if (!projectId) {
+    res.status(400).send("projectId required");
+    return;
+  }
+  const pathToForward = (req.url ?? "/").replace(/\?.*$/, "") || "/";
+  try {
+    const result = await builderService.proxyPreviewRequest(token, projectId, pathToForward);
+    if (result.contentType) res.setHeader("Content-Type", result.contentType);
+    let body = result.body;
+    if (result.status === 200 && result.contentType?.includes("text/html") && Buffer.isBuffer(body)) {
+      const pathPrefix = `/api/v1/builder/projects/${projectId}/preview-proxy`;
+      body = Buffer.from(
+        body.toString("utf-8").replace(/(href|src)=(["'])\/(?!\/)/g, `$1=$2${pathPrefix}/`),
+        "utf-8"
+      );
+    }
+    res.status(result.status).send(body);
+  } catch (err) {
+    const status = err && typeof (err as { statusCode?: number }).statusCode === "number" ? (err as { statusCode: number }).statusCode : 503;
+    if (status === 404) throw err;
+    res.status(503).setHeader("Content-Type", "text/html; charset=utf-8").send(builderService.PREVIEW_PROXY_GENERIC_HTML);
+  }
+}
+
+export async function exportZip(req: Request, res: Response): Promise<void> {
+  const token = getAccessToken(req);
+  if (!token) throw unauthorized("Authentication required");
+  const projectId = req.params.projectId as string;
+  if (!projectId) {
+    res.status(400).json({ error: "projectId is required" });
+    return;
+  }
+  const { stream, projectName } = await builderService.exportProjectZipStream(token, projectId);
+  const safeName = projectName.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 80) || "project";
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${safeName}.zip"`);
+  stream.pipe(res);
 }
 
 export async function applyFile(req: Request, res: Response): Promise<void> {
@@ -517,6 +586,21 @@ export async function syncGitHub(req: Request, res: Response): Promise<void> {
   }
   const result = await builderService.syncToGitHub(token, projectId, body.token.trim());
   res.json(result);
+}
+
+export async function exportProject(req: Request, res: Response): Promise<void> {
+  const token = getAccessToken(req);
+  if (!token) throw unauthorized("Authentication required");
+  const projectId = getProjectIdParam(req);
+  if (!projectId) {
+    res.status(400).json({ error: "projectId is required" });
+    return;
+  }
+  const { stream, projectName } = await builderService.exportProjectZipStream(token, projectId);
+  const safeName = projectName.replace(/[^a-zA-Z0-9_\-.]/g, "-") || "project";
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="${safeName}.zip"`);
+  stream.pipe(res);
 }
 
 export async function publishVercel(req: Request, res: Response): Promise<void> {

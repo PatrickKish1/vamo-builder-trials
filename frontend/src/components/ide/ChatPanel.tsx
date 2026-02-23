@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Send, Bot, Copy, Undo2, RefreshCw, Lightbulb, Zap, Users, TrendingUp, HelpCircle, Play, ChevronRight } from "lucide-react";
+import { Send, Bot, Copy, Undo2, RefreshCw, Lightbulb, Zap, Users, TrendingUp, HelpCircle, Play, ChevronRight, Square, ChevronDown, ChevronUp, X } from "lucide-react";
 import { CodeGenerationResponse } from "@/lib/ai-service";
 import { apiV1, authFetch } from "@/lib/api";
 import { Message, MessageContent } from "@/components/ui/message";
@@ -100,6 +100,12 @@ interface ChatPanelProps {
   onFilesApplied?: () => void;
   /** When true (view-only collaborator), disable sending messages and show clone hint. */
   builderViewOnly?: boolean;
+  /** Initial prompt from builder page (project.description). Shown at top of Chat tab. */
+  builderInitialPrompt?: string | null;
+  /** Last agent response summary for this project. Shown when status is ready. */
+  builderAgentSummary?: string | null;
+  /** Project status: scaffolding | ready | error. When scaffolding, show "Planning and building...". */
+  builderStatus?: string;
 }
 
 export function ChatPanel({
@@ -118,6 +124,9 @@ export function ChatPanel({
   reloadMessagesKey,
   onFilesApplied,
   builderViewOnly = false,
+  builderInitialPrompt,
+  builderAgentSummary,
+  builderStatus,
 }: ChatPanelProps) {
   const [selectedTag, setSelectedTag] = useState<ChatTag>(null);
 
@@ -163,9 +172,15 @@ export function ChatPanel({
   const [threadId, setThreadId] = useState<string | null>(() =>
     projectId ? getPersistedThreadId(projectId) : null
   );
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [pendingQueue, setPendingQueue] = useState<Array<{ id: string; text: string }>>([]);
+  const [queueExpanded, setQueueExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const triggerSentRef = useRef<string | null>(null);
   const persistedProjectIdRef = useRef<string | null>(null);
+
+  const MAX_QUEUE = 8;
+  const QUEUE_VISIBLE_COLLAPSED = 4;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -272,6 +287,8 @@ export function ChatPanel({
       if (!promptContent.trim() || !threadId) return;
 
       const activeTag = tag ?? selectedTag;
+      abortControllerRef.current = new AbortController();
+      const signal = abortControllerRef.current.signal;
 
       const userMessage: ChatMessage = {
         id: Date.now().toString(),
@@ -332,6 +349,7 @@ export function ChatPanel({
             method: "POST",
             credentials: "include",
             headers,
+            signal,
             body: JSON.stringify({
               threadId,
               prompt: promptContent,
@@ -347,6 +365,8 @@ export function ChatPanel({
             }),
           });
         } catch (networkErr) {
+          const isAbort = networkErr instanceof Error && networkErr.name === "AbortError";
+          if (isAbort) return;
           console.error("[chat] Network error:", networkErr);
           setMessages((prev) => [
             ...prev,
@@ -425,6 +445,8 @@ export function ChatPanel({
           onFilesApplied();
         }
       } catch (error) {
+        const isAbort = error instanceof Error && error.name === "AbortError";
+        if (isAbort) return;
         console.error("[chat] Unexpected error:", error);
         setMessages((prev) => [
           ...prev,
@@ -437,7 +459,14 @@ export function ChatPanel({
           },
         ]);
       } finally {
+        abortControllerRef.current = null;
         setIsLoading(false);
+        setPendingQueue((prev) => {
+          if (prev.length === 0) return prev;
+          const [first, ...rest] = prev;
+          queueMicrotask(() => sendWithPrompt(first.text));
+          return rest;
+        });
       }
     },
     [
@@ -459,11 +488,28 @@ export function ChatPanel({
     ]
   );
 
-  const sendMessage = async () => {
-    if (!input.trim() || !threadId) return;
-    const currentInput = input;
+  const sendMessage = () => {
+    const text = input.trim();
+    if (!text || !threadId) return;
     setInput("");
-    await sendWithPrompt(currentInput);
+    if (isLoading) {
+      if (pendingQueue.length >= MAX_QUEUE) {
+        toast.error(`Queue full (max ${MAX_QUEUE}). Wait for the current message to finish.`);
+        setInput(text);
+        return;
+      }
+      setPendingQueue((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, text }]);
+      return;
+    }
+    void sendWithPrompt(text);
+  };
+
+  const stopAgent = () => {
+    abortControllerRef.current?.abort();
+  };
+
+  const removeFromQueue = (id: string) => {
+    setPendingQueue((prev) => prev.filter((item) => item.id !== id));
   };
 
   const executePlan = useCallback(
@@ -510,6 +556,28 @@ export function ChatPanel({
       <div className="flex-1 min-h-0 overflow-hidden">
         <ScrollArea className="h-full max-h-full p-4">
           <div className="space-y-4 pr-2">
+            {projectId && (builderInitialPrompt || builderStatus === "scaffolding" || builderAgentSummary) && (
+              <section className="rounded-lg border bg-muted/40 p-3 space-y-2" aria-label="Project context">
+                {builderInitialPrompt?.trim() && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Your idea</p>
+                    <p className="text-sm text-foreground mt-0.5">{builderInitialPrompt}</p>
+                  </div>
+                )}
+                {builderStatus === "scaffolding" && (
+                  <p className="text-sm text-muted-foreground italic">Planning and building…</p>
+                )}
+                {builderStatus === "ready" && builderAgentSummary?.trim() && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Agent</p>
+                    <p className="text-sm text-foreground mt-0.5 whitespace-pre-wrap">{builderAgentSummary}</p>
+                  </div>
+                )}
+                {builderStatus === "ready" && !builderAgentSummary?.trim() && builderInitialPrompt?.trim() && (
+                  <p className="text-sm text-muted-foreground italic">Project ready. Send a message to add features or changes.</p>
+                )}
+              </section>
+            )}
             {messages.length === 0 && (
               <div className="text-center text-muted-foreground py-8">
                 <div className="h-12 w-12 rounded-full overflow-hidden mx-auto mb-4">
@@ -690,6 +758,46 @@ export function ChatPanel({
       </div>
 
       <div className="border-t px-3 pt-2 pb-3 space-y-2">
+        {/* Pending queue: messages waiting to be sent */}
+        {!builderViewOnly && pendingQueue.length > 0 && (
+          <section className="rounded-lg border bg-muted/50 overflow-hidden" aria-label="Queued messages">
+            <button
+              type="button"
+              onClick={() => setQueueExpanded((e) => !e)}
+              className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-xs font-medium text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-t-lg"
+              aria-expanded={queueExpanded}
+            >
+              <span>Queued ({pendingQueue.length})</span>
+              {pendingQueue.length > QUEUE_VISIBLE_COLLAPSED ? (
+                queueExpanded ? (
+                  <ChevronUp className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                )
+              ) : null}
+            </button>
+            <ul className="list-none p-0 m-0 divide-y divide-border/60 max-h-40 overflow-y-auto">
+              {(queueExpanded ? pendingQueue : pendingQueue.slice(0, QUEUE_VISIBLE_COLLAPSED)).map((item) => (
+                <li key={item.id} className="flex items-center gap-2 px-3 py-1.5 group">
+                  <span className="flex-1 min-w-0 truncate text-xs text-foreground" title={item.text}>
+                    {item.text.slice(0, 80)}
+                    {item.text.length > 80 ? "…" : ""}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100"
+                    onClick={() => removeFromQueue(item.id)}
+                    aria-label="Remove from queue"
+                  >
+                    <X className="h-3 w-3" aria-hidden />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         {/* Tag selector */}
         {!builderViewOnly && (
           <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Message tags">
@@ -737,19 +845,26 @@ export function ChatPanel({
                     ? "Describe the feature to build and the agent will implement it…"
                     : "Ask me to generate code, fix bugs, or explain concepts…"
             }
-            disabled={isLoading || builderViewOnly}
+            disabled={builderViewOnly}
             className="flex-1 min-w-0 min-h-10 max-h-32 resize-none overflow-y-auto py-2"
             rows={1}
             aria-readonly={builderViewOnly}
           />
           <Button
-            onClick={sendMessage}
-            disabled={!input.trim() || isLoading || builderViewOnly}
+            onClick={isLoading ? stopAgent : sendMessage}
+            disabled={!isLoading && (!input.trim() || builderViewOnly)}
             size="sm"
-            className="shrink-0 h-10"
-            aria-label="Send message"
+            className="shrink-0 h-10 gap-1.5"
+            aria-label={isLoading ? "Stop agent" : "Send message"}
           >
-            <Send className="h-4 w-4" aria-hidden />
+            {isLoading ? (
+              <>
+                <Square className="h-4 w-4" aria-hidden />
+                <span className="text-xs">Stop</span>
+              </>
+            ) : (
+              <Send className="h-4 w-4" aria-hidden />
+            )}
           </Button>
         </div>
       </div>

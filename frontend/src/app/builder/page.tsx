@@ -763,7 +763,7 @@ export default function BuilderLandingPage() {
         <div className="absolute inset-0 bg-linear-to-t from-background/80 via-background/40 to-transparent" />
       </div>
       
-      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} />
+      <LoginDialog open={loginDialogOpen} onOpenChange={setLoginDialogOpen} onSuccess={() => setLoginDialogOpen(false)} />
 
       <FileUploadModal
         open={showPreviewModal}
