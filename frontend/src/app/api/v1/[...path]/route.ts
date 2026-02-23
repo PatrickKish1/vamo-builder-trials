@@ -9,6 +9,7 @@ const FORWARD_HEADERS = [
   "content-type",
   "accept",
   "accept-language",
+  "cookie",
 ] as const;
 
 function getBackendBaseUrl(): string {
@@ -55,6 +56,15 @@ async function proxy(request: Request, pathSegments: string[]) {
   const res = await fetch(url, { method, headers, body });
 
   const responseHeaders = new Headers(res.headers);
+  const getSetCookie =
+    typeof res.headers.getSetCookie === "function"
+      ? res.headers.getSetCookie
+      : null;
+  if (getSetCookie) {
+    for (const cookie of getSetCookie.call(res.headers)) {
+      responseHeaders.append("Set-Cookie", cookie);
+    }
+  }
   return new Response(res.body, {
     status: res.status,
     statusText: res.statusText,

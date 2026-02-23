@@ -121,7 +121,6 @@ export default function Home() {
         : apiV1("/projects");
       const response = await authFetch(url, {
         headers: {
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         },
       });
       const data = await response.json();
@@ -137,7 +136,7 @@ export default function Home() {
         // Load files for the first project
         const firstProject = normalized[0];
         try {
-          const filesResponse = await fetch(apiV1(`/files?projectId=${firstProject.id}`));
+          const filesResponse = await authFetch(apiV1(`/files?projectId=${firstProject.id}`));
           const filesData = await filesResponse.json();
           if (filesData.files) {
             const projectWithFiles = {
@@ -162,7 +161,6 @@ export default function Home() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
             },
             body: JSON.stringify({ name: "Welcome Project", userId: user.id }),
           });
@@ -306,11 +304,10 @@ export default function Home() {
     
     if (user?.id) {
       try {
-        await fetch(apiV1("/projects"), {
+        await authFetch(apiV1("/projects"), {
           method: "PUT",
           headers: { 
             "Content-Type": "application/json",
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
           },
           body: JSON.stringify({ 
             id: normalized.id,
@@ -368,11 +365,10 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch(apiV1("/projects"), {
+      const response = await authFetch(apiV1("/projects"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
         },
         body: JSON.stringify({ name: projectName, userId: user.id }),
       });
@@ -396,7 +392,7 @@ export default function Home() {
   async function handleBuildProjectWithAI(description: string): Promise<void> {
     const prompt = `Create a new project. User request: ${description}\n\nRespond with code actions only: use the exact format with \`\`\`action TYPE: create PATH: <path> DESCRIPTION: <short description> \`\`\` followed by a code block for file content. Create the folder structure and initial files (e.g. README.md, main entry file). No conversational response—only action blocks and code.`;
     try {
-      const chatRes = await fetch(apiV1("/chat"), {
+      const chatRes = await authFetch(apiV1("/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -429,7 +425,7 @@ export default function Home() {
           expiresAt: Date.now() + PLAYGROUND_TTL,
         };
         try {
-          await fetch(apiV1("/projects"), {
+          await authFetch(apiV1("/projects"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -456,11 +452,10 @@ export default function Home() {
           setLoginDialogOpen(true);
           throw new Error("Sign in to create a stored project.");
         }
-        const projRes = await fetch(apiV1("/projects"), {
+        const projRes = await authFetch(apiV1("/projects"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
           },
           body: JSON.stringify({ name: projectName, userId: user.id }),
         });
@@ -490,9 +485,8 @@ export default function Home() {
         (a, b) => a.split("/").length - b.split("/").length
       );
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (sessionToken) headers.Authorization = `Bearer ${sessionToken}`;
       for (const folderPath of sortedFolders) {
-        await fetch(apiV1("/files"), {
+        await authFetch(apiV1("/files"), {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -506,7 +500,7 @@ export default function Home() {
       }
       for (const a of withContent) {
         if (a.content == null) continue;
-        await fetch(apiV1("/files"), {
+        await authFetch(apiV1("/files"), {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -553,11 +547,10 @@ export default function Home() {
     persist(next);
     if (!isPlayground && user?.id) {
       try {
-        await fetch(apiV1("/files"), { 
+        await authFetch(apiV1("/files"), { 
           method: "POST", 
           headers: { 
             "Content-Type": "application/json",
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
           }, 
           body: JSON.stringify({ 
             action: "delete", 
@@ -576,11 +569,10 @@ export default function Home() {
     persist({ ...next, activeFilePath: path });
     if (!isPlayground && user?.id) {
       try {
-        await fetch(apiV1("/files"), { 
+        await authFetch(apiV1("/files"), { 
           method: "POST", 
           headers: { 
             "Content-Type": "application/json",
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
           }, 
           body: JSON.stringify({ 
             action: "create", 
@@ -599,11 +591,10 @@ export default function Home() {
     persist(createFolder(project, path));
     if (!isPlayground && user?.id) {
       try {
-        await fetch(apiV1("/files"), { 
+        await authFetch(apiV1("/files"), { 
           method: "POST", 
           headers: { 
             "Content-Type": "application/json",
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
           }, 
           body: JSON.stringify({ 
             action: "create", 
@@ -623,11 +614,10 @@ export default function Home() {
     persist(next);
     if (!isPlayground && user?.id) {
       try {
-        await fetch(apiV1("/files"), { 
+        await authFetch(apiV1("/files"), { 
           method: "POST", 
           headers: { 
             "Content-Type": "application/json",
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
           }, 
           body: JSON.stringify({ 
             action: "rename", 
@@ -652,11 +642,10 @@ export default function Home() {
     persist(next);
     if (!isPlayground && user?.id) {
       try {
-        await fetch(apiV1("/files"), { 
+        await authFetch(apiV1("/files"), { 
           method: "POST", 
           headers: { 
             "Content-Type": "application/json",
-            ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
           }, 
           body: JSON.stringify({ 
             action: "update", 
@@ -691,11 +680,10 @@ export default function Home() {
           persist({ ...next, activeFilePath: action.path });
           if (!isPlayground && user?.id) {
             try {
-              await fetch(apiV1("/files"), { 
+              await authFetch(apiV1("/files"), { 
                 method: "POST", 
                 headers: { 
                   "Content-Type": "application/json",
-                  ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
                 }, 
                 body: JSON.stringify({ 
                   action: "create", 
@@ -719,11 +707,10 @@ export default function Home() {
           persist(next);
           if (!isPlayground && user?.id) {
             try {
-              await fetch(apiV1("/files"), { 
+              await authFetch(apiV1("/files"), { 
                 method: "POST", 
                 headers: { 
                   "Content-Type": "application/json",
-                  ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
                 }, 
                 body: JSON.stringify({ 
                   action: "update", 
@@ -745,11 +732,10 @@ export default function Home() {
         persist(next);
         if (!isPlayground && user?.id) {
           try {
-            await fetch(apiV1("/files"), { 
+            await authFetch(apiV1("/files"), { 
               method: "POST", 
               headers: { 
                 "Content-Type": "application/json",
-                ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
               }, 
               body: JSON.stringify({ 
                 action: "delete", 

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -137,12 +137,12 @@ export default function AdminPage() {
   const PAGE_SIZE = 20;
 
   const authHeaders = useCallback((): HeadersInit => {
-    return { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken ?? ""}` };
-  }, [sessionToken]);
+    return { "Content-Type": "application/json" };
+  }, []);
 
   const loadStats = useCallback(async () => {
     if (!sessionToken) return;
-    const res = await fetch(apiV1("/admin/stats"), { headers: authHeaders() });
+    const res = await authFetch(apiV1("/admin/stats"), { credentials: "include", headers: authHeaders() });
     if (!res.ok) {
       if (res.status === 403) {
         toast.error("Admin access only");
@@ -156,7 +156,8 @@ export default function AdminPage() {
 
   const loadUsers = useCallback(async (page: number) => {
     if (!sessionToken) return;
-    const res = await fetch(apiV1(`/admin/users?page=${page}&pageSize=${PAGE_SIZE}`), {
+    const res = await authFetch(apiV1(`/admin/users?page=${page}&pageSize=${PAGE_SIZE}`), {
+      credentials: "include",
       headers: authHeaders(),
     });
     if (!res.ok) return;
@@ -168,7 +169,7 @@ export default function AdminPage() {
   const loadRedemptions = useCallback(async (filter: "all" | "pending" | "fulfilled") => {
     if (!sessionToken) return;
     const qs = filter !== "all" ? `?status=${filter}` : "";
-    const res = await fetch(apiV1(`/admin/redemptions${qs}`), { headers: authHeaders() });
+    const res = await authFetch(apiV1(`/admin/redemptions${qs}`), { credentials: "include", headers: authHeaders() });
     if (!res.ok) return;
     const data = await res.json() as { redemptions: AdminRedemption[] };
     setRedemptions(data.redemptions);
@@ -176,7 +177,8 @@ export default function AdminPage() {
 
   const loadProjects = useCallback(async (page: number) => {
     if (!sessionToken) return;
-    const res = await fetch(apiV1(`/admin/projects?page=${page}&pageSize=${PAGE_SIZE}`), {
+    const res = await authFetch(apiV1(`/admin/projects?page=${page}&pageSize=${PAGE_SIZE}`), {
+      credentials: "include",
       headers: authHeaders(),
     });
     if (!res.ok) return;
@@ -187,7 +189,8 @@ export default function AdminPage() {
 
   const loadEvents = useCallback(async (page: number) => {
     if (!sessionToken) return;
-    const res = await fetch(apiV1(`/admin/analytics?page=${page}&pageSize=${PAGE_SIZE}`), {
+    const res = await authFetch(apiV1(`/admin/analytics?page=${page}&pageSize=${PAGE_SIZE}`), {
+      credentials: "include",
       headers: authHeaders(),
     });
     if (!res.ok) return;
@@ -215,8 +218,9 @@ export default function AdminPage() {
   const handleFulfillRedemption = async (id: string, status: "fulfilled" | "failed") => {
     setUpdatingId(id);
     try {
-      const res = await fetch(apiV1(`/admin/redemptions/${id}`), {
+      const res = await authFetch(apiV1(`/admin/redemptions/${id}`), {
         method: "POST",
+        credentials: "include",
         headers: authHeaders(),
         body: JSON.stringify({ status }),
       });

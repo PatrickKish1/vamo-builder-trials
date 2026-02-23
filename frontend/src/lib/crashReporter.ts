@@ -3,6 +3,8 @@
  * Never throws. Never blocks the UI. Fire-and-forget.
  */
 
+import { apiV1 } from "./api";
+
 interface CrashReport {
   message: string;
   stack?: string;
@@ -12,8 +14,6 @@ interface CrashReport {
   route?: string;
   extra?: Record<string, unknown>;
 }
-
-const INGEST_URL = `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}/api/v1/logs/crash`;
 
 /** Deduplicate within a session so the same error is not sent more than once. */
 const reportedDigests = new Set<string>();
@@ -48,11 +48,12 @@ export function reportCrash(error: unknown, opts: Partial<CrashReport> = {}): vo
       timestamp: new Date().toISOString(),
     });
 
+    const ingestUrl = apiV1("/logs/crash");
     if (typeof navigator !== "undefined" && "sendBeacon" in navigator) {
       const blob = new Blob([body], { type: "application/json" });
-      navigator.sendBeacon(INGEST_URL, blob);
+      navigator.sendBeacon(ingestUrl, blob);
     } else {
-      fetch(INGEST_URL, {
+      fetch(ingestUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body,

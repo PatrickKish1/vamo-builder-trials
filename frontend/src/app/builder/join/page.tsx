@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Loader2, Users, Mail } from "lucide-react";
 import { toast } from "sonner";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
 import { LoginDialog } from "@/components/auth/LoginDialog";
 
 interface InviteInfo {
@@ -57,14 +57,12 @@ export default function BuilderJoinPage() {
     if (!sessionToken || !token.trim() || !invite || accepting) return;
     setAccepting(true);
     try {
-      const response = await fetch(apiV1("/builder/invite/accept"), {
+      const response = await authFetch(apiV1("/builder/invite/accept"), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
-      });
+      }, sessionToken);
       const data = (await response.json()) as { projectId?: string; error?: string };
       if (!response.ok) {
         toast.error(data.error ?? "Failed to accept invite");

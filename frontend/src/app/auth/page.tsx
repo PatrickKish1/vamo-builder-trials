@@ -1,24 +1,35 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useCallback, useMemo } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { LoginDialog } from "@/components/auth/LoginDialog";
 import { useAuth } from "@/contexts/AuthContext";
-
-const AFTER_LOGIN_PATH = "/builder";
+import {
+  getReturnPathAfterLogin,
+} from "@/lib/auth-redirect";
 
 export default function AuthPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isLoading } = useAuth();
 
+  const returnPath = useMemo(() => {
+    const fromUrl = searchParams.get("returnTo");
+    const stored =
+      typeof window !== "undefined" ? sessionStorage.getItem("authReturnUrl") : null;
+    return getReturnPathAfterLogin(fromUrl, stored);
+  }, [searchParams]);
+
   const handleSuccess = useCallback(() => {
-    router.replace(AFTER_LOGIN_PATH);
-  }, [router]);
+    if (typeof window !== "undefined") sessionStorage.removeItem("authReturnUrl");
+    router.replace(returnPath);
+  }, [router, returnPath]);
 
   useEffect(() => {
     if (!user || isLoading) return;
-    router.replace(AFTER_LOGIN_PATH);
-  }, [user, isLoading, router]);
+    if (typeof window !== "undefined") sessionStorage.removeItem("authReturnUrl");
+    router.replace(returnPath);
+  }, [user, isLoading, router, returnPath]);
 
   if (user && !isLoading) {
     return (
@@ -35,7 +46,7 @@ export default function AuthPage() {
         <LoginDialog
           open
           onOpenChange={(open) => {
-            if (!open) router.replace(AFTER_LOGIN_PATH);
+            if (!open) router.replace(returnPath);
           }}
           onSuccess={handleSuccess}
         />

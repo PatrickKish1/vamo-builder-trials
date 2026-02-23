@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect } from "react";
+import { setSessionFromTokenAction } from "@/app/actions/auth";
 
 /**
- * Supabase redirects here after OAuth or email confirmation (hash #access_token=...).
- * We store the token and redirect to returnTo (query or sessionStorage) or /builder.
+ * OAuth redirect lands here (hash #access_token=...). We send the token to the backend
+ * to validate and set the session cookie, then redirect.
  */
 export default function AuthCallbackPage() {
   useEffect(() => {
@@ -23,13 +24,23 @@ export default function AuthCallbackPage() {
       return;
     }
 
-    localStorage.setItem("sessionToken", accessToken);
     const returnTo =
       new URLSearchParams(window.location.search).get("returnTo") ||
       sessionStorage.getItem("authReturnTo") ||
       "/builder";
     sessionStorage.removeItem("authReturnTo");
-    window.location.replace(returnTo.startsWith("/") ? returnTo : "/builder");
+
+    setSessionFromTokenAction(accessToken)
+      .then((result) => {
+        if ("user" in result) {
+          window.location.replace(returnTo.startsWith("/") ? returnTo : "/builder");
+        } else {
+          window.location.replace("/auth");
+        }
+      })
+      .catch(() => {
+        window.location.replace("/auth");
+      });
   }, []);
 
   return (

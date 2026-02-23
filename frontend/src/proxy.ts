@@ -14,6 +14,7 @@ export function proxy(req: NextRequest): NextResponse {
   }
 
   const sessionCookie =
+    req.cookies.get("sessionToken")?.value ??
     req.cookies.get("sb-access-token")?.value ??
     req.cookies.get("supabase-auth-token")?.value ??
     req.headers.get("x-session-token") ??
@@ -21,22 +22,22 @@ export function proxy(req: NextRequest): NextResponse {
 
   const isAuthenticated = Boolean(sessionCookie);
 
+  function redirectToAuth(returnPath: string): NextResponse {
+    const loginUrl = req.nextUrl.clone();
+    loginUrl.pathname = "/auth";
+    const safePath = returnPath.startsWith("/") && !returnPath.startsWith("//") ? returnPath : "/builder";
+    loginUrl.search = `returnTo=${encodeURIComponent(safePath)}`;
+    return NextResponse.redirect(loginUrl);
+  }
+
   if (pathname.startsWith(ADMIN_PATH)) {
-    if (!isAuthenticated) {
-      const loginUrl = req.nextUrl.clone();
-      loginUrl.pathname = "/auth";
-      loginUrl.search = "";
-      return NextResponse.redirect(loginUrl);
-    }
+    if (!isAuthenticated) return redirectToAuth(pathname + req.nextUrl.search);
     return NextResponse.next();
   }
 
   const builderProjectPath = /^\/builder\/build\/[^/]+/;
   if (!isAuthenticated && builderProjectPath.test(pathname)) {
-    const loginUrl = req.nextUrl.clone();
-    loginUrl.pathname = "/auth";
-    loginUrl.search = "";
-    return NextResponse.redirect(loginUrl);
+    return redirectToAuth(pathname + req.nextUrl.search);
   }
 
   return NextResponse.next();

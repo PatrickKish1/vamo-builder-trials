@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Sparkles, Upload, ImageIcon, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
 
 interface ProjectLogoModalProps {
   open: boolean;
@@ -60,14 +60,13 @@ export function ProjectLogoModal({
 
   const saveLogo = useCallback(
     async (url: string | null) => {
-      const response = await fetch(apiV1("/builder/projects"), {
+      const response = await authFetch(apiV1("/builder/projects"), {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify({ projectId, logoUrl: url }),
-      });
+      }, sessionToken);
       if (!response.ok) {
         const err = (await response.json().catch(() => ({}))) as { error?: string };
         throw new Error(err.error ?? "Failed to save logo");
@@ -79,14 +78,13 @@ export function ProjectLogoModal({
   const handleGenerateLogo = async () => {
     setGeneratingLogo(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/generate-logo`), {
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/generate-logo`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify({ prompt: aiPrompt.trim() || undefined, projectName }),
-      });
+      }, sessionToken);
       const data = (await response.json()) as { logoUrl?: string; error?: string };
       if (!response.ok || !data.logoUrl) {
         toast.error(data.error ?? "Logo generation failed");

@@ -28,7 +28,7 @@ import {
   Database,
 } from "lucide-react";
 import { toast } from "sonner";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
 
 interface McpServer {
   id: string;
@@ -150,14 +150,12 @@ export function IntegrationsDialog({
     }
     setGithubConnecting(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/integrations/github/connect`), {
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/integrations/github/connect`), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: githubToken.trim(), repoName: githubRepoName.trim() }),
-      });
+      }, sessionToken);
       const data = (await response.json()) as {
         repoUrl?: string;
         repoOwner?: string;
@@ -192,14 +190,12 @@ export function IntegrationsDialog({
     if (!integrations.github?.repoName || !integrations.github?.token) return;
     setGithubSyncing(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/integrations/github/sync`), {
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/integrations/github/sync`), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: integrations.github.token }),
-      });
+      }, sessionToken);
       const data = (await response.json()) as { error?: string; message?: string };
       if (!response.ok) {
         if (showToast) toast.error(data.error ?? "Sync failed");
@@ -241,14 +237,12 @@ export function IntegrationsDialog({
     }
     setVercelDeploying(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/publish/vercel`), {
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/publish/vercel`), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: vercelToken.trim() }),
-      });
+      }, sessionToken);
       const data = (await response.json()) as { deploymentUrl?: string; error?: string };
       if (!response.ok) {
         toast.error(data.error ?? "Deployment failed");

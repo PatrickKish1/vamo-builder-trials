@@ -171,7 +171,7 @@ export default function MarketplaceDetailPage() {
     try {
       const url = apiV1(`/builder/marketplace/${id}/bids`);
       const res = sessionToken
-        ? await authFetch(url, { headers: { Authorization: `Bearer ${sessionToken}` } })
+        ? await authFetch(url, { credentials: "include" })
         : await fetch(url);
       if (!res.ok) return;
       const data = (await res.json()) as { bids: MarketplaceBid[]; count: number };
@@ -207,7 +207,8 @@ export default function MarketplaceDetailPage() {
     try {
       const res = await authFetch(apiV1(`/builder/marketplace/${project.id}/bids`), {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           amountLow: low,
           amountHigh: high,
@@ -246,7 +247,7 @@ export default function MarketplaceDetailPage() {
     try {
       const res = await authFetch(apiV1(`/builder/marketplace/bids/${confirmAcceptBidId}/accept`), {
         method: "POST",
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        credentials: "include",
       });
       if (!res.ok) {
         const err = (await res.json()) as { error?: string };

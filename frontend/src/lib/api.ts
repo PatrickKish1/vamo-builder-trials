@@ -1,17 +1,15 @@
 /**
  * Base URL for API v1 calls. Use for all API calls (auth, projects, files, chat, etc.).
  *
- * Proxy mode (backend URL hidden from client):
- * - Leave NEXT_PUBLIC_API_URL unset. Then apiV1() returns same-origin paths (/api/v1/...).
- * - Requests go to the Next.js server, which proxies to the real backend (set API_URL or
- *   BACKEND_URL server-side only in .env).
+ * In the browser we always use same-origin paths (/api/v1/...) so requests go through
+ * the Next.js proxy and the session cookie (set for this origin) is sent. Set API_URL
+ * or BACKEND_URL server-side only so the proxy knows where to forward.
  *
- * Direct mode: set NEXT_PUBLIC_API_URL (e.g. http://localhost:4000) so the client calls
- * the backend directly.
+ * On the server (SSR/route handlers), getApiUrl() can use NEXT_PUBLIC_API_URL if set.
  */
 export function getApiUrl(): string {
   if (typeof window !== "undefined") {
-    return (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+    return "";
   }
   return (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 }
@@ -23,15 +21,39 @@ export function apiV1(path: string): string {
   return base ? `${base}/api/v1${p}` : `/api/v1${p}`;
 }
 
+/** Sentinel for cookie-based session (backend sets HttpOnly cookie). */
+export const COOKIE_SESSION = "cookie";
+
+export type AuthFetchOptions = {
+  /** When false, do not redirect to /auth on 401 (caller handles it). Default true. */
+  redirectOn401?: boolean;
+};
+
+import { getAuthUrl } from "./auth-redirect";
+
 /**
- * Fetch that on 401 clears session and redirects to /auth so expired tokens don't leave the app stuck.
- * Use for authenticated API calls. Caller should still check response.ok.
+ * Fetch for authenticated API calls. Uses cookie (credentials) when token is COOKIE_SESSION.
+ * On 401 redirects to /auth?returnTo=<current path> so after login the user returns to this page.
  */
-export async function authFetch(url: string, options?: RequestInit): Promise<Response> {
-  const res = await fetch(url, options);
-  if (res.status === 401 && typeof window !== "undefined") {
-    window.localStorage.removeItem("sessionToken");
-    window.location.replace("/auth");
+export async function authFetch(
+  url: string,
+  options?: RequestInit,
+  token?: string | null,
+  fetchOptions?: AuthFetchOptions
+): Promise<Response> {
+  const headers = new Headers(options?.headers);
+  if (token && token !== COOKIE_SESSION) {
+    headers.set("Authorization", `Bearer ${token}`);
+  } else {
+    headers.delete("Authorization");
+  }
+  const res = await fetch(url, { ...options, credentials: "include", headers });
+  if (
+    res.status === 401 &&
+    typeof window !== "undefined" &&
+    fetchOptions?.redirectOn401 !== false
+  ) {
+    window.location.replace(getAuthUrl());
     return res;
   }
   return res;

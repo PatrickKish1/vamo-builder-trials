@@ -28,14 +28,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sparkles, Code, Code2, Zap, Globe, Layout, Rocket, Send, Plus, Eye, ThumbsUp, Figma, ChevronUp, Mic, Upload, Github, FileUp, Phone, PhoneOff, ChevronRight, CircleDot, ArrowUpRight, Loader2, User, LogOut, FolderOpen, ShoppingBag } from "lucide-react";
+import { Sparkles, Code, Code2, Zap, Globe, Layout, Rocket, Send, Plus, Eye, ThumbsUp, Figma, ChevronUp, Mic, Upload, Github, FileUp, Phone, PhoneOff, ChevronRight, CircleDot, ArrowUpRight, Loader2, User, LogOut, FolderOpen, ShoppingBag, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import Image from "next/image";
 import GlassSurface from "@/components/ui/glass-surface";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { CallPanel } from "@/components/CallPanel";
 import ElectricBorder from "@/components/ui/electric-border";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { FileUploadModal } from "@/components/FileUploadModal";
 import {
   processFileListForPreview,
@@ -225,10 +226,18 @@ export default function BuilderLandingPage() {
   const [projectDescription, setProjectDescription] = useState("");
   const [projectExternalUrl, setProjectExternalUrl] = useState("");
   const [projectWhyBuilt, setProjectWhyBuilt] = useState("");
+  const [suggestedName, setSuggestedName] = useState("");
+  const [suggestedLogoPrompt, setSuggestedLogoPrompt] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null);
+  const [logoPreviewBase64, setLogoPreviewBase64] = useState<string | null>(null);
+  const [logoPreviewContentType, setLogoPreviewContentType] = useState<string | null>(null);
+  const [logoPreviewLoading, setLogoPreviewLoading] = useState(false);
+  const [suggestLoading, setSuggestLoading] = useState(false);
 
   useEffect(() => {
     if (!sessionToken) return;
-    fetch(apiV1("/profile"), { headers: { Authorization: `Bearer ${sessionToken}` } })
+    authFetch(apiV1("/profile"), { credentials: "include" }, sessionToken)
       .then((r) => r.json())
       .then((d: { profile?: { pineapple_balance?: number } }) => {
         setPineappleBalance(d.profile?.pineapple_balance ?? null);
@@ -261,48 +270,164 @@ export default function BuilderLandingPage() {
     setProjectDetailsOpen(true);
   };
 
+  useEffect(() => {
+    if (!projectDetailsOpen || !sessionToken || !prompt.trim()) return;
+    setSuggestLoading(true);
+    setLogoPreviewUrl(null);
+    setLogoPreviewBase64(null);
+    setLogoPreviewContentType(null);
+    authFetch(apiV1("/builder/suggest-project"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: prompt.trim(), framework: selectedFramework }),
+    }, sessionToken)
+      .then((res) => {
+        if (!res.ok) return res.json().then((b) => { throw new Error((b as { error?: string }).error ?? "Failed to prepare project"); });
+        return res.json();
+      })
+      .then((suggest: { name?: string; logoPrompt?: string }) => {
+        const name = typeof suggest.name === "string" && suggest.name.trim()
+          ? suggest.name.trim()
+          : `App: ${prompt.substring(0, 50)}`;
+        setSuggestedName(name);
+        setSuggestedLogoPrompt(typeof suggest.logoPrompt === "string" ? suggest.logoPrompt : "");
+        setProjectName(name);
+      })
+      .catch((err) => {
+        console.error("Suggest project error:", err);
+        toast.error(err instanceof Error ? err.message : "Failed to prepare project");
+      })
+      .finally(() => setSuggestLoading(false));
+  }, [projectDetailsOpen, sessionToken, prompt]);
+
+  useEffect(() => {
+    if (!projectDetailsOpen || !sessionToken || !suggestedName.trim() || suggestLoading) return;
+    setLogoPreviewLoading(true);
+    authFetch(apiV1("/builder/logo-preview"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectName: suggestedName.trim(),
+        logoPrompt: suggestedLogoPrompt || undefined,
+      }),
+    }, sessionToken)
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error("Logo preview failed")))
+      .then((data: { logoUrl?: string; logoImageBase64?: string; contentType?: string }) => {
+        if (typeof data.logoImageBase64 === "string" && data.logoImageBase64.length > 0 && data.contentType) {
+          setLogoPreviewUrl(`data:${data.contentType};base64,${data.logoImageBase64}`);
+          setLogoPreviewBase64(data.logoImageBase64);
+          setLogoPreviewContentType(data.contentType);
+        } else if (typeof data.logoUrl === "string") {
+          setLogoPreviewUrl(data.logoUrl);
+          setLogoPreviewBase64(null);
+          setLogoPreviewContentType(null);
+        } else {
+          setLogoPreviewUrl(null);
+          setLogoPreviewBase64(null);
+          setLogoPreviewContentType(null);
+        }
+      })
+      .catch(() => {
+        setLogoPreviewUrl(null);
+        setLogoPreviewBase64(null);
+        setLogoPreviewContentType(null);
+      })
+      .finally(() => setLogoPreviewLoading(false));
+  }, [projectDetailsOpen, sessionToken, suggestedName, suggestedLogoPrompt, suggestLoading]);
+
+  const handleRegenerateLogo = () => {
+    if (!sessionToken || !projectName.trim()) return;
+    setLogoPreviewLoading(true);
+    authFetch(apiV1("/builder/logo-preview"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectName: projectName.trim(),
+        logoPrompt: suggestedLogoPrompt || undefined,
+      }),
+    }, sessionToken)
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error("Logo preview failed")))
+      .then((data: { logoUrl?: string; logoImageBase64?: string; contentType?: string }) => {
+        if (typeof data.logoImageBase64 === "string" && data.logoImageBase64.length > 0 && data.contentType) {
+          setLogoPreviewUrl(`data:${data.contentType};base64,${data.logoImageBase64}`);
+          setLogoPreviewBase64(data.logoImageBase64);
+          setLogoPreviewContentType(data.contentType);
+        } else if (typeof data.logoUrl === "string") {
+          setLogoPreviewUrl(data.logoUrl);
+          setLogoPreviewBase64(null);
+          setLogoPreviewContentType(null);
+        } else {
+          setLogoPreviewUrl(null);
+          setLogoPreviewBase64(null);
+          setLogoPreviewContentType(null);
+        }
+      })
+      .catch(() => toast.error("Could not regenerate logo"))
+      .finally(() => setLogoPreviewLoading(false));
+  };
+
   const handleCreateProject = async () => {
-    if (!prompt.trim()) return;
+    const name = projectName.trim() || suggestedName.trim() || `App: ${prompt.substring(0, 50)}`;
+    if (!name) return;
     if (!sessionToken) return;
     setIsSubmitting(true);
     try {
-      const suggestRes = await fetch(apiV1("/builder/suggest-project"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
-        body: JSON.stringify({ prompt: prompt.trim(), framework: selectedFramework }),
-      });
-      if (!suggestRes.ok) {
-        const errBody = await suggestRes.json().catch(() => ({}));
-        throw new Error((errBody as { error?: string }).error ?? "Failed to prepare project");
+      let logoUrl: string | undefined;
+      if (logoPreviewBase64 && logoPreviewContentType) {
+        const uploadRes = await authFetch(apiV1("/builder/upload-logo"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageBase64: logoPreviewBase64,
+            contentType: logoPreviewContentType,
+          }),
+        }, sessionToken);
+        if (uploadRes.ok) {
+          const uploadData = (await uploadRes.json()) as { logoUrl?: string };
+          if (uploadData.logoUrl) logoUrl = uploadData.logoUrl;
+        }
+      } else if (typeof logoPreviewUrl === "string" && logoPreviewUrl.startsWith("http")) {
+        logoUrl = logoPreviewUrl;
       }
-      const suggest = (await suggestRes.json()) as { name?: string; logoPrompt?: string };
-      const projectName = typeof suggest.name === "string" && suggest.name.trim()
-        ? suggest.name.trim()
-        : `App: ${prompt.substring(0, 50)}`;
 
-      const response = await fetch(apiV1("/builder/projects"), {
+      const createBody: {
+        name: string;
+        description: string;
+        framework: string;
+        logoUrl?: string;
+        logoPrompt?: string;
+      } = {
+        name,
+        description: projectDescription.trim() || prompt,
+        framework: selectedFramework,
+      };
+      if (logoUrl) createBody.logoUrl = logoUrl;
+      if (suggestedLogoPrompt?.trim()) createBody.logoPrompt = suggestedLogoPrompt.trim();
+
+      const response = await authFetch(apiV1("/builder/projects"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
         },
-        body: JSON.stringify({
-          name: projectName,
-          description: projectDescription.trim() || prompt,
-          framework: selectedFramework,
-        }),
-      });
+        body: JSON.stringify(createBody),
+      }, sessionToken);
 
       if (!response.ok) {
         const errBody = await response.json().catch(() => ({}));
         throw new Error((errBody as { error?: string }).error ?? "Failed to create project");
       }
 
-      const data = await response.json();
-      const projectId = (data as { project: { id: string } }).project.id;
+      const data = (await response.json()) as { project?: { id: string }; id?: string };
+      const projectId = data.project?.id ?? data.id;
+      if (!projectId || typeof projectId !== "string") {
+        throw new Error("Project was created but no project id was returned. Check the project list.");
+      }
 
       try {
         sessionStorage.setItem("builder_chat_model", selectedChatModel);
@@ -312,28 +437,24 @@ export default function BuilderLandingPage() {
         /* ignore */
       }
 
-      const uploadLogoRes = await fetch(apiV1(`/builder/projects/${projectId}/upload-logo`), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
-        body: JSON.stringify({
-          projectName,
-          logoPrompt: typeof suggest.logoPrompt === "string" ? suggest.logoPrompt : undefined,
-        }),
-      });
-      if (!uploadLogoRes.ok) {
-        const errBody = await uploadLogoRes.json().catch(() => ({}));
-        console.warn("Logo upload failed:", (errBody as { error?: string }).error);
-        toast.warning("Project created; logo could not be generated. You can add one on the build page.");
-      }
-
       setProjectDetailsOpen(false);
       setProjectDescription("");
       setProjectExternalUrl("");
       setProjectWhyBuilt("");
+      setSuggestedName("");
+      setSuggestedLogoPrompt("");
+      setProjectName("");
+      setLogoPreviewUrl(null);
+      setLogoPreviewBase64(null);
+      setLogoPreviewContentType(null);
+
+      try {
+        sessionStorage.setItem("builder_just_created_project", projectId);
+      } catch {
+        /* ignore */
+      }
       router.push(`/builder/build/${projectId}`);
+      return;
     } catch (error) {
       console.error("Failed to create builder project:", error);
       toast.error(error instanceof Error ? error.message : "Failed to start building. Please try again.");
@@ -363,18 +484,17 @@ export default function BuilderLandingPage() {
 
       setUploadingToBuilder(true);
       try {
-        const createRes = await fetch(apiV1("/builder/projects"), {
+        const createRes = await authFetch(apiV1("/builder/projects"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${sessionToken}`,
           },
           body: JSON.stringify({
             name: "Imported project",
             description: "Project imported from files or GitHub",
             framework: selectedFramework,
           }),
-        });
+        }, sessionToken);
         if (!createRes.ok) {
           const err = await createRes.json();
           throw new Error(err?.error || "Failed to create project");
@@ -382,12 +502,12 @@ export default function BuilderLandingPage() {
         const { project } = await createRes.json();
         const projectId = project.id as string;
 
-        const authHeader = { Authorization: `Bearer ${sessionToken}` };
+        const authHeader = {  };
         const folders = selectedFiles.filter((f) => f.isFolder).sort((a, b) => a.path.localeCompare(b.path));
         const files = selectedFiles.filter((f) => !f.isFolder);
 
         for (const folder of folders) {
-          await fetch(apiV1("/files"), {
+          await authFetch(apiV1("/files"), {
             method: "POST",
             headers: { "Content-Type": "application/json", ...authHeader },
             body: JSON.stringify({
@@ -396,10 +516,10 @@ export default function BuilderLandingPage() {
               path: folder.path,
               isFolder: true,
             }),
-          });
+          }, sessionToken);
         }
         for (const file of files) {
-          await fetch(apiV1("/files"), {
+          await authFetch(apiV1("/files"), {
             method: "POST",
             headers: { "Content-Type": "application/json", ...authHeader },
             body: JSON.stringify({
@@ -410,12 +530,17 @@ export default function BuilderLandingPage() {
               encoding: file.encoding ?? "text",
               mimeType: file.mimeType,
             }),
-          });
+          }, sessionToken);
         }
 
         toast.success("Project created. Redirecting...");
         setShowPreviewModal(false);
         setPendingFiles([]);
+        try {
+          sessionStorage.setItem("builder_just_created_project", projectId);
+        } catch {
+          /* ignore */
+        }
         router.push(`/builder/build/${projectId}`);
       } catch (error) {
         console.error("Builder upload error:", error);
@@ -462,14 +587,14 @@ export default function BuilderLandingPage() {
     setBranchesLoading(true);
     setGithubError(null);
     try {
-      const response = await fetch(apiV1("/github/branches"), {
+      const response = await authFetch(apiV1("/github/branches"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           repoUrl: githubUrl.trim(),
           token: githubToken.trim() || undefined,
         }),
-      });
+      }, sessionToken);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data?.details?.message || data?.error || "Failed to fetch branches");
@@ -501,7 +626,7 @@ export default function BuilderLandingPage() {
       setImportLoading(true);
       setGithubError(null);
       try {
-        const response = await fetch(apiV1("/github/import"), {
+        const response = await authFetch(apiV1("/github/import"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -509,7 +634,7 @@ export default function BuilderLandingPage() {
             branch: selectedBranch || undefined,
             token: githubToken.trim() || undefined,
           }),
-        });
+        }, sessionToken);
         const data = await response.json();
         if (!response.ok) {
           throw new Error(data?.details?.message || data?.error || "Failed to import repository");
@@ -651,16 +776,80 @@ export default function BuilderLandingPage() {
         onCancel={() => setPendingFiles([])}
       />
 
-      {/* Project details dialog — opens when user clicks send */}
-      <Dialog open={projectDetailsOpen} onOpenChange={(open) => { if (!isSubmitting) setProjectDetailsOpen(open); }}>
+      {/* Project details dialog — opens when user clicks send; shows suggested name + logo, then create */}
+      <Dialog
+        open={projectDetailsOpen}
+        onOpenChange={(open) => {
+          if (!isSubmitting) {
+            setProjectDetailsOpen(open);
+            if (!open) {
+              setSuggestedName("");
+              setSuggestedLogoPrompt("");
+              setProjectName("");
+              setLogoPreviewUrl(null);
+              setLogoPreviewBase64(null);
+              setLogoPreviewContentType(null);
+            }
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-lg" aria-describedby="project-details-desc">
           <DialogHeader>
             <DialogTitle>Create project</DialogTitle>
             <DialogDescription id="project-details-desc">
-              Add a name and optional details. You can update these any time from the Business panel.
+              Review the suggested name and logo, add details, then create. Logo is generated on the server; use Regenerate to try again.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
+            <div className="grid gap-2">
+              <Label htmlFor="pd-name">Project name</Label>
+              {suggestLoading ? (
+                <div className="flex h-10 items-center gap-2 rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  <span>Getting suggestion…</span>
+                </div>
+              ) : (
+                <Input
+                  id="pd-name"
+                  placeholder="Project name"
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  aria-label="Project name"
+                />
+              )}
+            </div>
+            <div className="grid gap-2">
+              <Label>Logo</Label>
+              <div className="flex items-center gap-3">
+                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-lg border bg-muted/30 flex items-center justify-center">
+                  {logoPreviewLoading ? (
+                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-hidden />
+                  ) : logoPreviewUrl ? (
+                    <img
+                      src={logoPreviewUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-2xl font-bold text-muted-foreground">
+                      {projectName.charAt(0).toUpperCase() || "?"}
+                    </span>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={handleRegenerateLogo}
+                  disabled={logoPreviewLoading || suggestLoading || !projectName.trim()}
+                  aria-label="Regenerate logo"
+                >
+                  <RefreshCw className={cn("h-4 w-4", logoPreviewLoading && "animate-spin")} aria-hidden />
+                  Regenerate
+                </Button>
+              </div>
+            </div>
             <div className="grid gap-2">
               <Label htmlFor="pd-description">What does this project do? <span className="text-muted-foreground text-xs">(required)</span></Label>
               <Textarea
@@ -673,7 +862,7 @@ export default function BuilderLandingPage() {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="pd-url">External URL <span className="text-muted-foreground text-xs">(optional — e.g. Lovable, v0, Replit link)</span></Label>
+              <Label htmlFor="pd-url">External URL <span className="text-muted-foreground text-xs">(optional)</span></Label>
               <Input
                 id="pd-url"
                 type="url"
@@ -697,7 +886,10 @@ export default function BuilderLandingPage() {
             <Button variant="outline" onClick={() => setProjectDetailsOpen(false)} disabled={isSubmitting}>
               Cancel
             </Button>
-            <Button onClick={handleCreateProject} disabled={isSubmitting || !projectDescription.trim()}>
+            <Button
+              onClick={handleCreateProject}
+              disabled={isSubmitting || !projectDescription.trim() || !(projectName.trim() || suggestedName.trim())}
+            >
               {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden />Creating…</> : "Create project"}
             </Button>
           </DialogFooter>
@@ -943,18 +1135,17 @@ export default function BuilderLandingPage() {
                       /* ignore */
                     }
                     if (!projectId) {
-                      const res = await fetch(apiV1("/builder/projects"), {
+                      const res = await authFetch(apiV1("/builder/projects"), {
                         method: "POST",
                         headers: {
                           "Content-Type": "application/json",
-                          Authorization: `Bearer ${sessionToken}`,
                         },
                         body: JSON.stringify({
                           name: "Voice project",
                           description: "Project created from voice conversation",
                           framework: selectedFramework,
                         }),
-                      });
+                      }, sessionToken);
                       if (!res.ok) {
                         const errBody = await res.json().catch(() => ({}));
                         throw new Error((errBody as { error?: string }).error ?? "Failed to create project");

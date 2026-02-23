@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ArrowLeft, Terminal, X, Loader2 } from "lucide-react";
 import { ProjectSidebar, CodeEditor, TabsBar } from "@/components/ide";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
 import type { ProjectFile } from "@/lib/projects";
 import { toast } from "sonner";
 
@@ -66,14 +66,12 @@ export function BuilderCodeView({
         toast.error("Session expired. Please sign in again.");
         return;
       }
-      const response = await fetch(apiV1("/builder/files"), {
+      const response = await authFetch(apiV1("/builder/files"), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, action, path, content }),
-      });
+      }, sessionToken);
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         const msg = (err as { error?: string }).error ?? "Request failed";
@@ -236,14 +234,12 @@ export function BuilderCodeView({
       setTerminalInput("");
       setTerminalRunning(true);
       try {
-        const response = await fetch(apiV1(`/builder/projects/${projectId}/run-command`), {
+        const response = await authFetch(apiV1(`/builder/projects/${projectId}/run-command`), {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${sessionToken}`,
-          },
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ command: cmd }),
-        });
+        }, sessionToken);
         const data = (await response.json()) as { stdout?: string; stderr?: string; exitCode?: number; error?: string };
         if (!response.ok) {
           const err = (data as { error?: string }).error ?? `Request failed (HTTP ${response.status})`;

@@ -48,3 +48,7 @@ VOICE_AGENT_RESEARCH.md
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+fr-docs
+docs
+BUILDER_IMPLEMENTATION_STRATEGY.md

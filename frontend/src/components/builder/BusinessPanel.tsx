@@ -46,7 +46,7 @@ import {
   Check,
 } from "lucide-react";
 import { toast } from "sonner";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
 
 export interface TractionSignalItem {
   type: string;
@@ -847,9 +847,9 @@ function CollaboratorsTab({
   const loadCollaborators = useCallback(async () => {
     if (!sessionToken || !projectId) return;
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/collaborators`), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/collaborators`), {
+        credentials: "include",
+      }, sessionToken);
       if (response.status === 404) {
         setCollaborators([]);
         return;
@@ -881,14 +881,13 @@ function CollaboratorsTab({
     }
     setAdding(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/collaborators`), {
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/collaborators`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify({ email, permission }),
-      });
+      }, sessionToken);
       const data = (await response.json()) as {
         inviteLink?: string;
         projectName?: string;

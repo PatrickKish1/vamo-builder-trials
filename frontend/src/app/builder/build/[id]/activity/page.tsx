@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Loader2, ChevronLeft, Activity, MessageSquare, Zap, Search } from "lucide-react";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
 
 interface ActivityItem {
   type: string;
@@ -68,9 +68,9 @@ export default function ProjectActivityPage() {
     if (!sessionToken || !projectId) return;
     setLoading(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects?projectId=${projectId}`), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      const response = await authFetch(apiV1(`/builder/projects?projectId=${projectId}`), {
+        credentials: "include",
+      }, sessionToken);
       if (!response.ok) throw new Error("Failed to load project");
       const data = (await response.json()) as {
         project?: {

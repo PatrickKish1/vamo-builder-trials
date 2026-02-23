@@ -32,7 +32,8 @@ import { BuilderCodeView } from "@/components/builder/BuilderCodeView";
 import { BusinessPanel } from "@/components/builder/BusinessPanel";
 import { IntegrationsDialog } from "@/components/builder/IntegrationsDialog";
 import { ProjectLogoModal } from "@/components/builder/ProjectLogoModal";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
+import { getAuthUrl } from "@/lib/auth-redirect";
 import { cn } from "@/lib/utils";
 import { reportCrash } from "@/lib/crashReporter";
 import JSZip from "jszip";
@@ -191,9 +192,9 @@ export default function BuilderBuildPage() {
   const loadProfile = useCallback(async () => {
     if (!sessionToken) return;
     try {
-      const response = await fetch(apiV1("/profile"), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      const response = await authFetch(apiV1("/profile"), {
+        credentials: "include",
+      }, sessionToken);
       if (response.ok) {
         const data = await response.json();
         const balance = data.profile?.pineapple_balance;
@@ -209,9 +210,9 @@ export default function BuilderBuildPage() {
   const loadFiles = useCallback(async () => {
     if (!projectId || !sessionToken) return;
     try {
-      const response = await fetch(apiV1(`/builder/files?projectId=${projectId}`), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      const response = await authFetch(apiV1(`/builder/files?projectId=${projectId}`), {
+        credentials: "include",
+      }, sessionToken);
       const data = await response.json();
       if (data.files) {
         setFiles(data.files.filter((f: { isFolder?: boolean }) => !f.isFolder));
@@ -221,50 +222,61 @@ export default function BuilderBuildPage() {
     }
   }, [projectId, sessionToken]);
 
-  const loadProject = useCallback(async (silent = false) => {
-    if (!sessionToken || !projectId) return;
+  const loadProject = useCallback(
+    async (silent = false) => {
+      if (!projectId || !sessionToken) return;
 
-    if (!silent) setLoading(true);
-    try {
-      const response = await fetch(apiV1(`/builder/projects?projectId=${projectId}`), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      if (!silent) setLoading(true);
+      try {
+        const response = await authFetch(
+          apiV1(`/builder/projects?projectId=${projectId}`),
+          {},
+          sessionToken,
+          { redirectOn401: false }
+        );
 
-      if (!response.ok) {
-        const errBody = await response.json().catch(() => ({})) as { error?: string };
-        if (!silent) toast.error(errBody.error ?? "Failed to load project");
-        return "error";
-      }
+        if (response.status === 401) {
+          router.push(getAuthUrl(`/builder/build/${projectId}`));
+          return "error";
+        }
 
-      const data = (await response.json()) as {
-        project: {
-          name: string;
-          framework: string;
-          status: string;
-          previewUrl?: string | null;
-          [key: string]: unknown;
+        if (!response.ok) {
+          const errBody = (await response.json().catch(() => ({}))) as { error?: string };
+          if (!silent) toast.error(errBody.error ?? "Failed to load project");
+          return "error";
+        }
+
+        const data = (await response.json()) as {
+          project: {
+            name: string;
+            framework: string;
+            status: string;
+            previewUrl?: string | null;
+            [key: string]: unknown;
+          };
         };
-      };
-      setProject(data.project);
+        setProject(data.project);
 
-      const url = data.project?.previewUrl ?? null;
-      setPreviewUrl(url);
-      setPreviewRunning(!!url);
+        const url = data.project?.previewUrl ?? null;
+        setPreviewUrl(url);
+        setPreviewRunning(!!url);
 
-      await loadProfile();
-      await loadFiles();
-      return data.project.status as string;
-    } catch (error) {
-      if (!silent) {
-        console.error("Failed to load project:", error);
-        toast.error("Could not reach the server. Check your connection and try again.");
+        await loadProfile();
+        await loadFiles();
+        return data.project.status as string;
+      } catch (error) {
+        if (!silent) {
+          console.error("Failed to load project:", error);
+          toast.error("Could not reach the server. Check your connection and try again.");
+        }
+        reportCrash(error, { extra: { projectId, context: "loadProject" } });
+        return "error";
+      } finally {
+        if (!silent) setLoading(false);
       }
-      reportCrash(error, { extra: { projectId, context: "loadProject" } });
-      return "error";
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, [sessionToken, projectId, loadProfile, loadFiles]);
+    },
+    [sessionToken, projectId, loadProfile, loadFiles, router]
+  );
 
   const updateProject = useCallback(
     async (params: {
@@ -279,14 +291,13 @@ export default function BuilderBuildPage() {
     }) => {
       if (!sessionToken || !projectId) return;
       try {
-        const response = await fetch(apiV1("/builder/projects"), {
+        const response = await authFetch(apiV1("/builder/projects"), {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${sessionToken}`,
           },
           body: JSON.stringify({ projectId, ...params }),
-        });
+        }, sessionToken);
         if (!response.ok) throw new Error("Update failed");
         await loadProject(true);
       } catch (err) {
@@ -302,9 +313,9 @@ export default function BuilderBuildPage() {
     if (!sessionToken) return;
     setProjectsLoading(true);
     try {
-      const response = await fetch(apiV1("/builder/projects"), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      const response = await authFetch(apiV1("/builder/projects"), {
+        credentials: "include",
+      }, sessionToken);
       const data = await response.json();
       if (data.projects) {
         setBuilderProjects(
@@ -341,50 +352,48 @@ export default function BuilderBuildPage() {
   }, [chatCollapsed, leftPanelTab, portalTarget]);
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("authReturnUrl", `/builder/build/${projectId}`);
-      }
-      router.push("/builder");
+    if (authLoading) return;
+    if (!sessionToken) {
+      router.push(getAuthUrl(`/builder/build/${projectId}`));
       return;
     }
+    if (projectId) void loadProject(false);
+  }, [authLoading, sessionToken, projectId, loadProject, router]);
 
-    if (user && projectId) {
-      void loadProject();
-    }
-  }, [user, projectId, authLoading, loadProject]);
+  const effectiveAuth = Boolean(sessionToken);
 
   // When we land with status scaffolding, start the scaffold request (build page runs it)
   useEffect(() => {
-    if (!project || project.status !== "scaffolding" || !sessionToken || !projectId || scaffoldStartedRef.current) return;
+    if (!project || project.status !== "scaffolding" || !effectiveAuth || !projectId || scaffoldStartedRef.current) return;
     scaffoldStartedRef.current = true;
     const description = typeof window !== "undefined" ? sessionStorage.getItem("builder_prompt") ?? "" : "";
-    fetch(apiV1("/builder/scaffold"), {
+    authFetch(apiV1("/builder/scaffold"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({ projectId, description }),
-    }).catch(() => {
+    }, sessionToken ?? null).catch(() => {
       scaffoldStartedRef.current = false;
     });
-  }, [project?.status, projectId, sessionToken]);
+  }, [project?.status, projectId, sessionToken, effectiveAuth]);
 
   // Poll project when preview is not running so we pick up server start (e.g. from another tab or after refresh)
   useEffect(() => {
-    if (!projectId || !sessionToken || previewRunning || project?.status === "scaffolding") return;
+    if (!projectId || !effectiveAuth || previewRunning || project?.status === "scaffolding") return;
     const interval = setInterval(() => {
       void loadProject(true);
     }, 5000);
     return () => clearInterval(interval);
-  }, [projectId, sessionToken, previewRunning, project?.status, loadProject]);
+  }, [projectId, effectiveAuth, previewRunning, project?.status, loadProject]);
 
   // Poll preview errors when preview is running so we can show "Fix now"
   useEffect(() => {
-    if (!projectId || !sessionToken || !previewRunning) return;
+    if (!projectId || !effectiveAuth || !previewRunning) return;
     const fetchErrors = async () => {
       try {
-        const response = await fetch(apiV1(`/builder/preview/errors?projectId=${encodeURIComponent(projectId)}`), {
-          headers: { Authorization: `Bearer ${sessionToken}` },
-        });
+        const response = await authFetch(apiV1(`/builder/preview/errors?projectId=${encodeURIComponent(projectId)}`), {
+          credentials: "include",
+        }, sessionToken ?? null);
         if (!response.ok) return;
         const data = (await response.json()) as { output?: string; hasErrors?: boolean };
         if (data.hasErrors && data.output?.trim()) setPreviewError(data.output.trim());
@@ -395,7 +404,7 @@ export default function BuilderBuildPage() {
     void fetchErrors();
     const interval = setInterval(fetchErrors, 5000);
     return () => clearInterval(interval);
-  }, [projectId, sessionToken, previewRunning]);
+  }, [projectId, sessionToken, effectiveAuth, previewRunning]);
 
   const handleFixNow = useCallback(() => {
     if (!previewError) return;
@@ -414,14 +423,13 @@ export default function BuilderBuildPage() {
     try {
       toast.info("Starting preview server...");
       
-      const response = await fetch(apiV1("/builder/preview/start"), {
+      const response = await authFetch(apiV1("/builder/preview/start"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify({ projectId }),
-      });
+      }, sessionToken);
 
       if (!response.ok) {
         const errBody = await response.json().catch(() => ({}));
@@ -448,11 +456,10 @@ export default function BuilderBuildPage() {
     }
 
     try {
-      const response = await fetch(apiV1("/builder/files"), {
+      const response = await authFetch(apiV1("/builder/files"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify({
           projectId,
@@ -460,7 +467,7 @@ export default function BuilderBuildPage() {
           path: action.path,
           content: action.content,
         }),
-      });
+      }, sessionToken);
 
       if (!response.ok) {
         throw new Error("Failed to update file");
@@ -519,11 +526,10 @@ export default function BuilderBuildPage() {
     try {
       const headers: HeadersInit = {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${sessionToken}`,
       };
 
       let threadId: string;
-      const threadRes = await fetch(apiV1("/thread"), { method: "POST", headers });
+      const threadRes = await authFetch(apiV1("/thread"), { method: "POST", headers }, sessionToken);
       const threadData = await threadRes.json();
       if (threadData.threadId) {
         threadId = threadData.threadId;
@@ -540,7 +546,7 @@ export default function BuilderBuildPage() {
 
       let filesContext: Array<{ path: string; content: string }> = [];
       try {
-        const filesRes = await fetch(apiV1(`/builder/files?projectId=${projectId}`), { headers });
+        const filesRes = await authFetch(apiV1(`/builder/files?projectId=${projectId}`), { headers }, sessionToken);
         const filesData = await filesRes.json();
         if (filesData.files) {
           filesContext = filesData.files
@@ -563,7 +569,7 @@ export default function BuilderBuildPage() {
         "Scaffolding is complete. The project structure is in context. Implement the following:\n\n" +
         savedPrompt.trim();
 
-      const chatRes = await fetch(apiV1("/chat"), {
+      const chatRes = await authFetch(apiV1("/chat"), {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -577,7 +583,7 @@ export default function BuilderBuildPage() {
             projectId,
           },
         }),
-      });
+      }, sessionToken);
 
       const chatData = (await chatRes.json()) as {
         message?: string;
@@ -679,14 +685,13 @@ export default function BuilderBuildPage() {
       return;
     }
     try {
-      const response = await fetch(apiV1("/builder/projects"), {
+      const response = await authFetch(apiV1("/builder/projects"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify({ name: "Untitled project", framework: "nextjs" }),
-      });
+      }, sessionToken);
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         throw new Error((err as { error?: string }).error ?? "Failed to create project");
@@ -709,14 +714,13 @@ export default function BuilderBuildPage() {
     if (!deleteProjectId || !sessionToken) return;
     setDeletingProject(true);
     try {
-      const response = await fetch(apiV1("/builder/projects"), {
+      const response = await authFetch(apiV1("/builder/projects"), {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
         },
         body: JSON.stringify({ projectId: deleteProjectId }),
-      });
+      }, sessionToken);
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         throw new Error((err as { error?: string }).error ?? "Failed to delete project");
@@ -743,10 +747,10 @@ export default function BuilderBuildPage() {
     if (!sessionToken || !projectId || cloningProject) return;
     setCloningProject(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/clone`), {
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/clone`), {
         method: "POST",
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+        credentials: "include",
+      }, sessionToken);
       const data = (await response.json()) as { project?: { id: string }; error?: string };
       if (!response.ok) {
         toast.error(data.error ?? "Failed to clone project");
@@ -786,10 +790,10 @@ export default function BuilderBuildPage() {
     if (!sessionToken || !projectId || listingForSale) return;
     setListingForSale(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/list-for-sale`), {
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/list-for-sale`), {
         method: "POST",
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+        credentials: "include",
+      }, sessionToken);
       const data = (await response.json()) as { success?: boolean; error?: string };
       if (!response.ok) {
         toast.error(data.error ?? "Failed to list project");
@@ -809,10 +813,10 @@ export default function BuilderBuildPage() {
     setOfferLoading(true);
     setOfferDialogOpen(true);
     try {
-      const response = await fetch(apiV1(`/builder/projects/${projectId}/offer`), {
+      const response = await authFetch(apiV1(`/builder/projects/${projectId}/offer`), {
         method: "POST",
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+        credentials: "include",
+      }, sessionToken);
       const data = (await response.json()) as {
         offerLow?: number;
         offerHigh?: number;
@@ -842,7 +846,8 @@ export default function BuilderBuildPage() {
     }
   }, [sessionToken, projectId, offerLoading]);
 
-  if (authLoading || loading) {
+  const showLoading = authLoading || loading;
+  if (showLoading) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center gap-6 bg-background" aria-busy="true" aria-live="polite">
         <div className="relative flex items-center justify-center">

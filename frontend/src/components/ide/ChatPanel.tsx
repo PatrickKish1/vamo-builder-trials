@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Send, Bot, Copy, Undo2, RefreshCw, Lightbulb, Zap, Users, TrendingUp, HelpCircle, Play, ChevronRight } from "lucide-react";
 import { CodeGenerationResponse } from "@/lib/ai-service";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
 import { Message, MessageContent } from "@/components/ui/message";
 import Orb from "@/components/Orb";
 import { MessageRenderer } from "./MessageRenderer";
@@ -175,9 +175,8 @@ export function ChatPanel({
     try {
       const headers: HeadersInit = { "Content-Type": "application/json" };
       if (sessionToken) {
-        headers.Authorization = `Bearer ${sessionToken}`;
       }
-      const response = await fetch(apiV1("/thread"), { method: "POST", headers });
+      const response = await authFetch(apiV1("/thread"), { method: "POST", headers });
       const data = await response.json();
       if (data.threadId) {
         setThreadId(data.threadId);
@@ -293,10 +292,7 @@ export function ChatPanel({
             const filesUrl = builderFilesToken
               ? apiV1(`/builder/files?projectId=${projectId}`)
               : apiV1(`/files?projectId=${projectId}`);
-            const filesHeaders: HeadersInit = builderFilesToken
-              ? { Authorization: `Bearer ${builderFilesToken}` }
-              : {};
-            const filesResponse = await fetch(filesUrl, { headers: filesHeaders });
+            const filesResponse = await authFetch(filesUrl, { credentials: "include" });
             const filesData = await filesResponse.json();
             if (filesData.files) {
               const MAX_FILES = 28;
@@ -329,14 +325,12 @@ export function ChatPanel({
             : `prompt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
         const headers: Record<string, string> = { "Content-Type": "application/json" };
-        if (sessionToken) {
-          headers.Authorization = `Bearer ${sessionToken}`;
-        }
 
         let response: Response;
         try {
-          response = await fetch(apiV1("/chat"), {
+          response = await authFetch(apiV1("/chat"), {
             method: "POST",
+            credentials: "include",
             headers,
             body: JSON.stringify({
               threadId,

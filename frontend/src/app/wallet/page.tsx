@@ -27,7 +27,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronLeft, ChevronRight, Wallet } from "lucide-react";
 import { toast } from "sonner";
-import { apiV1 } from "@/lib/api";
+import { apiV1, authFetch } from "@/lib/api";
+import { getAuthUrl } from "@/lib/auth-redirect";
 
 const REDEEM_MINIMUM = 50;
 const REDEEM_TYPE = "Uber Eats Credit";
@@ -66,7 +67,7 @@ function redemptionBadgeVariant(status: Redemption["status"]): "default" | "seco
 
 export default function WalletPage() {
   const router = useRouter();
-  const { user, sessionToken } = useAuth();
+  const { user, sessionToken, isLoading: authLoading } = useAuth();
 
   const [balance, setBalance] = useState<number | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
@@ -88,9 +89,7 @@ export default function WalletPage() {
     if (!sessionToken) return;
     setLoadingBalance(true);
     try {
-      const res = await fetch(apiV1("/profile"), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      const res = await authFetch(apiV1("/profile"), { credentials: "include" }, sessionToken);
       const data = await res.json() as { profile?: { pineapple_balance?: number } };
       setBalance(data.profile?.pineapple_balance ?? 0);
     } catch {
@@ -104,9 +103,9 @@ export default function WalletPage() {
     if (!sessionToken) return;
     setLoadingLedger(true);
     try {
-      const res = await fetch(apiV1(`/rewards/ledger?page=${page}&pageSize=${pageSize}`), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      const res = await authFetch(apiV1(`/rewards/ledger?page=${page}&pageSize=${pageSize}`), {
+        credentials: "include",
+      }, sessionToken);
       const data = await res.json() as { ledger?: LedgerEntry[]; total?: number };
       setLedger(data.ledger ?? []);
       setLedgerTotal(data.total ?? 0);
@@ -121,9 +120,9 @@ export default function WalletPage() {
     if (!sessionToken) return;
     setLoadingRedemptions(true);
     try {
-      const res = await fetch(apiV1("/rewards/redemptions"), {
-        headers: { Authorization: `Bearer ${sessionToken}` },
-      });
+      const res = await authFetch(apiV1("/rewards/redemptions"), {
+        credentials: "include",
+      }, sessionToken);
       const data = await res.json() as { redemptions?: Redemption[] };
       setRedemptions(data.redemptions ?? []);
     } catch {
@@ -156,14 +155,12 @@ export default function WalletPage() {
     }
     setRedeeming(true);
     try {
-      const res = await fetch(apiV1("/rewards/redeem"), {
+      const res = await authFetch(apiV1("/rewards/redeem"), {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${sessionToken}`,
-        },
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ amount, rewardType: "uber_eats" }),
-      });
+      }, sessionToken);
       const data = await res.json() as { success?: boolean; newBalance?: number; error?: string };
       if (!res.ok || !data.success) {
         toast.error(data.error ?? "Redemption failed");
@@ -182,15 +179,26 @@ export default function WalletPage() {
     }
   }, [redeemAmount, balance, sessionToken, loadLedger, loadRedemptions]);
 
+  if (authLoading) {
+    return (
+      <main className="min-h-screen flex items-center justify-center bg-background">
+        <p className="text-muted-foreground">Loading…</p>
+      </main>
+    );
+  }
+
   if (!user) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-background">
         <Card className="max-w-sm w-full">
           <CardHeader>
             <CardTitle>Sign in required</CardTitle>
+            <CardDescription>Sign in to view your pineapple wallet and redemptions.</CardDescription>
           </CardHeader>
           <CardContent>
-            <Button onClick={() => router.push("/builder")}>Go to Builder</Button>
+            <Button asChild>
+              <a href={getAuthUrl("/wallet")}>Sign in</a>
+            </Button>
           </CardContent>
         </Card>
       </main>

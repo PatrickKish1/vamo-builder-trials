@@ -69,7 +69,6 @@ export function LoginDialog({ open, onOpenChange, onSuccess }: LoginDialogProps)
     try {
       await login(email, password);
       onSuccess?.();
-      onOpenChange(false);
       setEmail("");
       setPassword("");
     } catch (err: unknown) {
@@ -93,7 +92,6 @@ export function LoginDialog({ open, onOpenChange, onSuccess }: LoginDialogProps)
         setName("");
       } else {
         onSuccess?.();
-        onOpenChange(false);
         setEmail("");
         setPassword("");
         setName("");
