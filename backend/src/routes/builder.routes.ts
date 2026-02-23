@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { requireAuth } from "../middleware/auth.js";
 import * as builderController from "../controllers/builder.controller.js";
 
 export const builderRouter: Router = Router();
@@ -78,8 +79,14 @@ builderRouter.post("/marketplace/bids/:bidId/accept", (req, res, next) => {
 builderRouter.post("/projects/:projectId/list-for-sale", (req, res, next) => {
   builderController.listProjectForSale(req, res).catch(next);
 });
-builderRouter.post("/projects/:projectId/generate-logo", (req, res, next) => {
+builderRouter.post("/projects/:projectId/generate-logo", requireAuth, (req, res, next) => {
   builderController.generateProjectLogo(req, res).catch(next);
+});
+builderRouter.post("/logo-preview", requireAuth, (req, res, next) => {
+  builderController.logoPreview(req, res).catch(next);
+});
+builderRouter.post("/upload-logo", (req, res, next) => {
+  builderController.uploadLogo(req, res).catch(next);
 });
 builderRouter.post("/projects/:projectId/upload-logo", (req, res, next) => {
   builderController.uploadProjectLogo(req, res).catch(next);

@@ -14,6 +14,8 @@ export const ALLOWED_EXTENSIONS = [
 export function sanitizePath(path: string): string {
   let sanitized = path.replace(/\.\./g, "").replace(/\\/g, "/");
   sanitized = sanitized.replace(/^\/+/, "");
+  // Intentionally reject control chars and DEL
+  // eslint-disable-next-line no-control-regex
   sanitized = sanitized.replace(/[\x00-\x1F\x7F]/g, "");
   return sanitized;
 }
@@ -26,6 +28,8 @@ export function validateExtension(fileName: string): boolean {
 export function validatePath(path: string): boolean {
   if (path.includes("..")) return false;
   if (path.startsWith("/") || /^[A-Z]:\\/.test(path)) return false;
+  // Intentionally reject control chars and DEL
+  // eslint-disable-next-line no-control-regex
   if (/[\x00-\x1F\x7F]/.test(path)) return false;
   return true;
 }

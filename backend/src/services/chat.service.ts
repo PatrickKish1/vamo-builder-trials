@@ -122,7 +122,7 @@ async function getClaudeModel(): Promise<BaseChatModel> {
       temperature: 0.1,
       apiKey,
     });
-  } catch (e) {
+  } catch {
     throw new Error(
       "Claude provider not available. Install @langchain/anthropic and set ANTHROPIC_API_KEY."
     );
@@ -142,7 +142,7 @@ async function getGeminiModel(): Promise<BaseChatModel> {
       temperature: 0.1,
       apiKey,
     });
-  } catch (e) {
+  } catch {
     throw new Error(
       "Gemini provider not available. Install @langchain/google-genai and set GOOGLE_GENERATIVE_AI_API_KEY."
     );
@@ -482,11 +482,11 @@ export async function suggestProjectFromPrompt(
     temperature: 0.3,
   });
   const systemPrompt = `You are a product naming and branding assistant. Given a short app idea from the user, respond with exactly two things:
-1. A concise project name (2-4 words, title case, no special characters, suitable for an app/folder name). Examples: "Task Flow", "SaaS Dashboard", "AI Chat UI".
-2. A one-line image description to generate a minimal app logo (e.g. "minimal flat icon for a task list app", "clean SaaS dashboard icon"). Keep it under 15 words.
+1. A short, memorable BRAND NAME (one or two words, no generic titles). Think startup/product name: e.g. "Lampify", "Taskflow", "Zenode", "Notion", "Figma". Do NOT return descriptive titles like "Lamp E-commerce Store" or "SaaS Dashboard"—return a proper brand name that could be a company or product name.
+2. A detailed LOGO DESCRIPTION for an image generator: write a vivid, specific prompt (2–3 sentences) that would produce a distinctive app logo. Include: visual style (e.g. isometric, flat design, gradient, line art), the main subject or symbol, mood (e.g. warm, modern, playful), and 1–2 colors or lighting details. Do NOT use generic filler like "minimal flat icon" or "app logo for X" by itself—describe what the logo should LOOK like so an artist could draw it. Example for a lamp store: "Isometric illustration of a sleek modern lamp with a soft golden glow, warm amber and cream palette, soft shadows, clean lines, premium product vibe, square composition." Another: "Bold geometric bird in flight, single line art style, deep blue on white, confident and minimal, tech startup feel."
 
 Respond ONLY with valid JSON in this exact shape, no other text:
-{"name": "<project name>", "logoPrompt": "<logo image description>"}`;
+{"name": "<brand name>", "logoPrompt": "<detailed logo image description>"}`;
   const userMessage = framework
     ? `App idea: ${userPrompt}\nFramework: ${framework}.`
     : `App idea: ${userPrompt}`;
@@ -503,7 +503,7 @@ Respond ONLY with valid JSON in this exact shape, no other text:
       ? parsed.name.trim().slice(0, 80)
       : "My App";
     const logoPrompt = typeof parsed.logoPrompt === "string" && parsed.logoPrompt.trim()
-      ? parsed.logoPrompt.trim().slice(0, 200)
+      ? parsed.logoPrompt.trim().slice(0, 400)
       : "minimal app logo";
     return { name, logoPrompt };
   } catch {

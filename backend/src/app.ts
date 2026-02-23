@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { env } from "./config/env.js";
 import { registerRoutes } from "./routes/index.js";
 import { registerV1Routes } from "./routes/v1/index.js";
@@ -19,6 +20,7 @@ export function createApp(): express.Application {
       credentials: true,
     })
   );
+  app.use(cookieParser());
   app.use(express.json({ limit: "10mb" }));
 
   // Request logging: log method, path, and response status so backend console is visible

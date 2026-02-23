@@ -2,12 +2,8 @@ import type { Request, Response } from "express";
 import * as builderService from "../services/builder.service.js";
 import * as chatService from "../services/chat.service.js";
 import { getSupabaseClientWithAuth } from "../config/supabase.js";
+import { getAccessToken } from "../middleware/auth.js";
 import { unauthorized } from "../utils/errors.js";
-
-function getAccessToken(req: Request): string | undefined {
-  const authHeader = req.headers.authorization;
-  return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
-}
 
 function getProjectIdParam(req: Request): string {
   const p = req.params.projectId;
@@ -40,16 +36,38 @@ export async function suggestProject(req: Request, res: Response): Promise<void>
   res.json({ name: result.name, logoPrompt: result.logoPrompt });
 }
 
+export async function uploadLogo(req: Request, res: Response): Promise<void> {
+  const token = getAccessToken(req);
+  if (!token) throw unauthorized("Authentication required");
+  const body = req.body as { imageBase64?: string; contentType?: string };
+  if (!body.imageBase64 || !body.contentType?.trim()) {
+    res.status(400).json({ error: "imageBase64 and contentType are required" });
+    return;
+  }
+  const result = await builderService.uploadLogoImage(token, {
+    base64: body.imageBase64,
+    contentType: body.contentType.trim(),
+  });
+  res.json(result);
+}
+
 export async function createBuilderProject(req: Request, res: Response): Promise<void> {
   const token = getAccessToken(req);
   if (!token) throw unauthorized("Authentication required");
   if (!req.user?.id) throw unauthorized("User not found");
-  const body = req.body as { name?: string; description?: string; framework?: string; logoUrl?: string | null };
+  const body = req.body as {
+    name?: string;
+    description?: string;
+    framework?: string;
+    logoUrl?: string | null;
+    logoPrompt?: string;
+  };
   const result = await builderService.createBuilderProject(token, req.user.id, {
     name: body.name ?? "",
     description: body.description,
     framework: body.framework,
     logoUrl: body.logoUrl,
+    logoPrompt: body.logoPrompt,
   });
   res.json(result);
 }
@@ -436,6 +454,22 @@ export async function generateProjectLogo(req: Request, res: Response): Promise<
     return;
   }
   const result = await builderService.generateProjectLogo(body.projectName.trim(), body.prompt);
+  res.json(result);
+}
+
+/** POST /builder/logo-preview – returns logo as base64 when possible (so it loads in the modal), else URL. */
+export async function logoPreview(req: Request, res: Response): Promise<void> {
+  const token = getAccessToken(req);
+  if (!token) throw unauthorized("Authentication required");
+  const body = req.body as { projectName?: string; logoPrompt?: string };
+  if (!body.projectName?.trim()) {
+    res.status(400).json({ error: "projectName is required" });
+    return;
+  }
+  const result = await builderService.getLogoPreviewImage(
+    body.projectName.trim(),
+    body.logoPrompt?.trim()
+  );
   res.json(result);
 }
 

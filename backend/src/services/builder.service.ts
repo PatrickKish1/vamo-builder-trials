@@ -42,6 +42,18 @@ export interface BuilderProjectResponse {
   collaboratorPermission?: "view" | "edit";
 }
 
+/** Slim project data for list view - excludes heavy fields like tractionSignals, linkedAssets, recentActivity. */
+export interface BuilderProjectListItem {
+  id: string;
+  name: string;
+  framework: string;
+  status: string;
+  progressScore: number;
+  logoUrl: string | null;
+  updatedAt: string;
+  pineappleCount: number;
+}
+
 export interface BuilderCollaboratorRow {
   id: string;
   projectId: string;
@@ -109,7 +121,7 @@ export async function listBuilderProjects(
   accessToken: string,
   projectId?: string | null,
   userId?: string | null
-): Promise<{ projects?: BuilderProjectResponse[]; project?: BuilderProjectResponse | null }> {
+): Promise<{ projects?: BuilderProjectListItem[]; project?: BuilderProjectResponse | null }> {
   const supabase = getSupabaseClientWithAuth(accessToken);
 
   if (projectId) {
@@ -145,12 +157,40 @@ export async function listBuilderProjects(
 
   const { data, error } = await supabase
     .from("builder_projects")
-    .select("*")
+    .select("id, name, framework, status, progress_score, logo_url, updated_at")
     .order("updated_at", { ascending: false });
   if (error) throw dbError("Failed to load projects. Please try again.");
-  const projects = (data ?? []).map((row) => rowToBuilderProject(row as Record<string, unknown>));
-  for (const p of projects) {
-    p.logoUrl = await resolveLogoUrl(p.logoUrl);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const projectIds = rows.map((r) => r.id as string);
+
+  const pineappleByProject: Record<string, number> = {};
+  if (projectIds.length > 0) {
+    const { data: ledgerRows } = await supabase
+      .from("reward_ledger")
+      .select("project_id, reward_amount")
+      .in("project_id", projectIds);
+    for (const r of ledgerRows ?? []) {
+      const pid = r.project_id as string;
+      if (pid) {
+        pineappleByProject[pid] = (pineappleByProject[pid] ?? 0) + (Number(r.reward_amount) || 0);
+      }
+    }
+  }
+
+  const projects: BuilderProjectListItem[] = [];
+  for (const row of rows) {
+    const id = row.id as string;
+    const logoUrl = await resolveLogoUrl((row.logo_url as string) ?? null);
+    projects.push({
+      id,
+      name: (row.name as string) ?? "",
+      framework: (row.framework as string) ?? "nextjs",
+      status: (row.status as string) ?? "scaffolding",
+      progressScore: typeof row.progress_score === "number" ? row.progress_score : 0,
+      logoUrl,
+      updatedAt: (row.updated_at as string) ?? "",
+      pineappleCount: Math.max(0, pineappleByProject[id] ?? 0),
+    });
   }
   return { projects };
 }
@@ -158,7 +198,13 @@ export async function listBuilderProjects(
 export async function createBuilderProject(
   accessToken: string,
   userId: string,
-  params: { name: string; description?: string; framework?: string; logoUrl?: string | null }
+  params: {
+    name: string;
+    description?: string;
+    framework?: string;
+    logoUrl?: string | null;
+    logoPrompt?: string;
+  }
 ): Promise<{ project: BuilderProjectResponse }> {
   const { name, description, framework, logoUrl } = params;
   if (!name?.trim()) throw badRequest("Project name is required");
@@ -183,7 +229,10 @@ export async function createBuilderProject(
     console.error("[builder] createBuilderProject Supabase error:", error.code, error.message, error.details);
     throw dbError("Failed to create project. Please try again.");
   }
-  return { project: rowToBuilderProject(data as Record<string, unknown>) };
+  const row = data as Record<string, unknown>;
+  const project = rowToBuilderProject(row);
+  project.logoUrl = await resolveLogoUrl(project.logoUrl);
+  return { project };
 }
 
 export async function cloneBuilderProject(
@@ -288,6 +337,8 @@ export async function deleteBuilderProject(
   const storedSandboxId = (project as Record<string, unknown>).sandbox_id as string | null;
   await killBuilderSandbox(projectId, storedSandboxId);
   await deleteAllProjectFilesFromDb(supabaseService, projectId);
+
+  await supabaseService.rpc("revoke_rewards_for_project", { p_project_id: projectId });
 
   const { error: deleteError } = await supabase.from("builder_projects").delete().eq("id", projectId);
   if (deleteError) throw deleteError;
@@ -697,6 +748,7 @@ export async function addCollaborator(
     const session = await getSessionUser(accessToken);
     if (session.authenticated && session.user?.email) inviterEmail = session.user.email;
   } catch {
+    // inviterEmail remains undefined; optional for invite link
   }
 
   return {
@@ -1017,25 +1069,110 @@ async function resolveLogoUrl(logoUrl: string | null): Promise<string | null> {
   }
 }
 
+/** Try OpenAI DALL-E 2 for logo image. Returns buffer + contentType or null if unavailable. */
+async function generateProjectLogoWithOpenAI(
+  projectName: string,
+  userPrompt?: string
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  const apiKey = env.openaiApiKey;
+  if (!apiKey?.trim()) return null;
+
+  const basePrompt = userPrompt?.trim()
+    ? userPrompt.trim()
+    : `minimal flat vector app logo icon for "${projectName}", clean design, solid background, professional`;
+  const prompt = `${basePrompt}, square format, no text, digital art, 256x256`;
+
+  const res = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "dall-e-2",
+      prompt,
+      n: 1,
+      size: "256x256",
+      response_format: "b64_json",
+    }),
+    signal: AbortSignal.timeout(30000),
+  }).catch((err) => {
+    console.warn("[builder] DALL-E logo request failed:", err?.message ?? err);
+    return null;
+  });
+
+  if (!res?.ok) return null;
+  const data = (await res.json()) as { data?: Array<{ b64_json?: string }> };
+  const b64 = data?.data?.[0]?.b64_json;
+  if (!b64 || typeof b64 !== "string") return null;
+  const buffer = Buffer.from(b64, "base64");
+  return { buffer, contentType: "image/png" };
+}
+
 export async function generateProjectLogo(
   projectName: string,
   userPrompt?: string
 ): Promise<{ logoUrl: string }> {
   const basePrompt = userPrompt?.trim()
-    ? `${userPrompt.trim()}, app logo for "${projectName}"`
-    : `minimal flat vector app logo icon for "${projectName}", clean design, solid background, professional`;
+    ? `${userPrompt.trim()}, square format, no text, digital art, 256x256`
+    : `minimal flat vector app logo icon for "${projectName}", clean design, solid background, professional, square format, no text, 256x256`;
 
-  const encoded = encodeURIComponent(
-    `${basePrompt}, square format, no text, digital art, vibrant, 512x512`
-  );
+  const encoded = encodeURIComponent(basePrompt);
 
   const logoUrl = `https://image.pollinations.ai/prompt/${encoded}?width=256&height=256&nologo=true&seed=${Date.now() % 99999}`;
   return { logoUrl };
 }
 
 /**
- * Generate logo image, upload to Supabase Storage (if bucket configured), update project logo_url.
- * Enforces 5MB max and image/jpeg, image/jpg, image/png. Bucket must be private; use signed URLs to display.
+ * Get logo image for preview: returns base64 when we can (DALL-E or successful fetch), else Pollinations URL.
+ * Callers can display data URL when logoImageBase64 is set, avoiding Pollinations 1033 in the browser.
+ */
+export async function getLogoPreviewImage(
+  projectName: string,
+  userPrompt?: string
+): Promise<{ logoImageBase64?: string; contentType?: string; logoUrl: string }> {
+  const promptForImage = userPrompt?.trim()
+    ? `${userPrompt.trim()}, square format, no text, digital art, 256x256, app logo`
+    : `minimal flat vector app logo for "${projectName}", clean design, professional, square, no text, 256x256`;
+
+  const openAIResult = await generateProjectLogoWithOpenAI(projectName.trim(), userPrompt?.trim());
+  if (openAIResult) {
+    const { buffer, contentType } = openAIResult;
+    if (LOGO_ALLOWED_MIME_TYPES.has(contentType) && buffer.length <= LOGO_MAX_BYTES) {
+      return {
+        logoImageBase64: buffer.toString("base64"),
+        contentType,
+        logoUrl: `https://image.pollinations.ai/prompt/${encodeURIComponent(promptForImage)}?width=256&height=256&nologo=true&seed=0`,
+      };
+    }
+  }
+
+  const { logoUrl } = await generateProjectLogo(projectName.trim(), userPrompt?.trim());
+  const response = await fetch(logoUrl, {
+    method: "GET",
+    headers: { "User-Agent": "CodeEasyBuilder/1.0 (https://codeeasy.app)" },
+    signal: AbortSignal.timeout(15000),
+  }).catch(() => null);
+
+  if (response?.ok) {
+    const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    if (LOGO_ALLOWED_MIME_TYPES.has(contentType)) {
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length <= LOGO_MAX_BYTES) {
+        return {
+          logoImageBase64: buffer.toString("base64"),
+          contentType,
+          logoUrl,
+        };
+      }
+    }
+  }
+
+  return { logoUrl };
+}
+
+/**
+ * Generate logo image, upload (if bucket configured), update project logo_url.
  */
 export async function uploadProjectLogoToStorage(
   accessToken: string,
@@ -1046,19 +1183,113 @@ export async function uploadProjectLogoToStorage(
   const { logoPrompt, projectName } = params;
   if (!projectName?.trim()) throw badRequest("projectName is required");
 
+  const preview = await getLogoPreviewImage(projectName.trim(), logoPrompt?.trim());
+  if (preview.logoImageBase64 && preview.contentType && bucket) {
+    const buffer = Buffer.from(preview.logoImageBase64, "base64");
+    if (LOGO_ALLOWED_MIME_TYPES.has(preview.contentType) && buffer.length <= LOGO_MAX_BYTES) {
+      const ext = preview.contentType === "image/png" ? "png" : "jpg";
+      const storagePath = `projects/${projectId}.${ext}`;
+      const supabase = getSupabaseServiceClient();
+      const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, buffer, {
+        contentType: preview.contentType,
+        upsert: true,
+      });
+      if (!uploadError) {
+        const supabaseAuth = getSupabaseClientWithAuth(accessToken);
+        const { error: updateError } = await supabaseAuth
+          .from("builder_projects")
+          .update({ logo_url: storagePath, updated_at: new Date().toISOString() })
+          .eq("id", projectId);
+        if (!updateError) return { logoUrl: storagePath };
+      }
+    }
+  }
+
+  const openAIResult = await generateProjectLogoWithOpenAI(projectName.trim(), logoPrompt?.trim());
+  if (openAIResult && bucket) {
+    const { buffer, contentType } = openAIResult;
+    if (!LOGO_ALLOWED_MIME_TYPES.has(contentType) || buffer.length > LOGO_MAX_BYTES) {
+      const supabase = getSupabaseClientWithAuth(accessToken);
+      const { logoUrl: fallbackUrl } = await generateProjectLogo(projectName.trim(), logoPrompt?.trim());
+      const { error: updateError } = await supabase
+        .from("builder_projects")
+        .update({ logo_url: fallbackUrl, updated_at: new Date().toISOString() })
+        .eq("id", projectId);
+      if (updateError) throw dbError("Failed to update project logo");
+      return { logoUrl: fallbackUrl };
+    }
+    const ext = contentType === "image/png" ? "png" : "jpg";
+    const storagePath = `projects/${projectId}.${ext}`;
+    const supabase = getSupabaseServiceClient();
+    const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, buffer, {
+      contentType,
+      upsert: true,
+    });
+    if (uploadError) {
+      console.warn("[builder] DALL-E logo upload failed, saving Pollinations URL:", uploadError.message);
+      const { logoUrl: fallbackUrl } = await generateProjectLogo(projectName.trim(), logoPrompt?.trim());
+      const supabaseAuth = getSupabaseClientWithAuth(accessToken);
+      await supabaseAuth
+        .from("builder_projects")
+        .update({ logo_url: fallbackUrl, updated_at: new Date().toISOString() })
+        .eq("id", projectId);
+      return { logoUrl: fallbackUrl };
+    }
+    const supabaseAuth = getSupabaseClientWithAuth(accessToken);
+    const { error: updateError } = await supabaseAuth
+      .from("builder_projects")
+      .update({ logo_url: storagePath, updated_at: new Date().toISOString() })
+      .eq("id", projectId);
+    if (updateError) throw dbError("Failed to update project logo");
+    return { logoUrl: storagePath };
+  }
+
   const { logoUrl: imageUrl } = await generateProjectLogo(projectName.trim(), logoPrompt?.trim());
 
-  const response = await fetch(imageUrl, { method: "GET" });
-  if (!response.ok) throw new AppError("Failed to fetch generated logo image", 502);
+  const response = await fetch(imageUrl, {
+    method: "GET",
+    headers: { "User-Agent": "CodeEasyBuilder/1.0 (https://codeeasy.app)" },
+    signal: AbortSignal.timeout(15000),
+  }).catch((err) => {
+    console.warn("[builder] logo image fetch failed:", err?.message ?? err);
+    return null;
+  });
+
+  if (!response?.ok) {
+    const status = response?.status ?? "network_error";
+    console.warn("[builder] logo image fetch not ok, saving Pollinations URL as fallback:", status);
+    const supabase = getSupabaseClientWithAuth(accessToken);
+    const { error: updateError } = await supabase
+      .from("builder_projects")
+      .update({ logo_url: imageUrl, updated_at: new Date().toISOString() })
+      .eq("id", projectId);
+    if (updateError) throw dbError("Failed to update project logo");
+    return { logoUrl: imageUrl };
+  }
+
   const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
   if (!LOGO_ALLOWED_MIME_TYPES.has(contentType)) {
-    throw badRequest("Logo must be image/jpeg, image/jpg, or image/png");
+    const supabase = getSupabaseClientWithAuth(accessToken);
+    const { error: updateError } = await supabase
+      .from("builder_projects")
+      .update({ logo_url: imageUrl, updated_at: new Date().toISOString() })
+      .eq("id", projectId);
+    if (updateError) throw dbError("Failed to update project logo");
+    return { logoUrl: imageUrl };
   }
   const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.length > LOGO_MAX_BYTES) throw badRequest("Logo file size must not exceed 5MB");
+  if (buffer.length > LOGO_MAX_BYTES) {
+    const supabase = getSupabaseClientWithAuth(accessToken);
+    const { error: updateError } = await supabase
+      .from("builder_projects")
+      .update({ logo_url: imageUrl, updated_at: new Date().toISOString() })
+      .eq("id", projectId);
+    if (updateError) throw dbError("Failed to update project logo");
+    return { logoUrl: imageUrl };
+  }
 
   const ext = contentType === "image/png" ? "png" : "jpg";
-  const storagePath = `${projectId}.${ext}`;
+  const storagePath = `projects/${projectId}.${ext}`;
 
   if (bucket) {
     const supabase = getSupabaseServiceClient();
@@ -1068,7 +1299,13 @@ export async function uploadProjectLogoToStorage(
     });
     if (uploadError) {
       console.error("[builder] logo upload error:", uploadError);
-      throw new AppError("Failed to upload logo to storage", 500);
+      const supabaseAuth = getSupabaseClientWithAuth(accessToken);
+      const { error: updateError } = await supabaseAuth
+        .from("builder_projects")
+        .update({ logo_url: imageUrl, updated_at: new Date().toISOString() })
+        .eq("id", projectId);
+      if (updateError) throw dbError("Failed to update project logo");
+      return { logoUrl: imageUrl };
     }
     const supabaseAuth = getSupabaseClientWithAuth(accessToken);
     const { error: updateError } = await supabaseAuth
@@ -1086,6 +1323,91 @@ export async function uploadProjectLogoToStorage(
     .eq("id", projectId);
   if (updateError) throw dbError("Failed to update project logo");
   return { logoUrl: imageUrl };
+}
+
+/**
+ * Upload a logo image from base64 (no project required). Returns the storage path to use as logoUrl when creating a project.
+ * Requires Storage bucket. Enforces 5MB and image/jpeg, image/jpg, image/png.
+ */
+export async function uploadLogoImage(
+  _accessToken: string,
+  params: { base64: string; contentType: string }
+): Promise<{ logoUrl: string }> {
+  const bucket = env.supabaseLogoBucket;
+  if (!bucket) {
+    throw badRequest(
+      "Logo upload requires SUPABASE_STORAGE_BUCKET (or SUPABASE_LOGO_BUCKET) to be set in .env to your Supabase Storage bucket name. Create a bucket in Supabase Dashboard → Storage if needed."
+    );
+  }
+  const { base64, contentType } = params;
+  const normalizedType = contentType.split(";")[0].trim().toLowerCase();
+  if (!LOGO_ALLOWED_MIME_TYPES.has(normalizedType)) {
+    throw badRequest("Logo must be image/jpeg, image/jpg, or image/png");
+  }
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(base64, "base64");
+  } catch {
+    throw badRequest("Invalid logo file data");
+  }
+  if (buffer.length > LOGO_MAX_BYTES) throw badRequest("Logo file size must not exceed 5MB");
+
+  const ext = normalizedType === "image/png" ? "png" : "jpg";
+  const id = randomBytes(12).toString("hex");
+  const storagePath = `projects/logos/${id}.${ext}`;
+  const supabase = getSupabaseServiceClient();
+  const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, buffer, {
+    contentType: normalizedType,
+    upsert: false,
+  });
+  if (uploadError) {
+    console.error("[builder] uploadLogoImage error:", uploadError);
+    throw new AppError("Failed to upload logo", 500);
+  }
+  return { logoUrl: storagePath };
+}
+
+/**
+ * Upload a logo from base64 for an existing project (updates project logo_url). Requires Storage bucket.
+ */
+export async function uploadProjectLogoFromBuffer(
+  accessToken: string,
+  projectId: string,
+  params: { base64: string; contentType: string }
+): Promise<{ logoUrl: string | null }> {
+  const bucket = env.supabaseLogoBucket;
+  if (!bucket) throw badRequest("Logo upload from file requires storage to be configured");
+  const { base64, contentType } = params;
+  const normalizedType = contentType.split(";")[0].trim().toLowerCase();
+  if (!LOGO_ALLOWED_MIME_TYPES.has(normalizedType)) {
+    throw badRequest("Logo must be image/jpeg, image/jpg, or image/png");
+  }
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(base64, "base64");
+  } catch {
+    throw badRequest("Invalid logo file data");
+  }
+  if (buffer.length > LOGO_MAX_BYTES) throw badRequest("Logo file size must not exceed 5MB");
+
+  const ext = normalizedType === "image/png" ? "png" : "jpg";
+  const storagePath = `projects/${projectId}.${ext}`;
+  const supabase = getSupabaseServiceClient();
+  const { error: uploadError } = await supabase.storage.from(bucket).upload(storagePath, buffer, {
+    contentType: normalizedType,
+    upsert: true,
+  });
+  if (uploadError) {
+    console.error("[builder] logo upload from buffer error:", uploadError);
+    throw new AppError("Failed to upload logo", 500);
+  }
+  const supabaseAuth = getSupabaseClientWithAuth(accessToken);
+  const { error: updateError } = await supabaseAuth
+    .from("builder_projects")
+    .update({ logo_url: storagePath, updated_at: new Date().toISOString() })
+    .eq("id", projectId);
+  if (updateError) throw dbError("Failed to update project logo");
+  return { logoUrl: storagePath };
 }
 
 interface GitHubApiRepoResponse {

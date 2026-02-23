@@ -114,3 +114,28 @@ export async function getSessionUser(accessToken: string): Promise<SessionRespon
 export function logout(): { success: true } {
   return { success: true };
 }
+
+/**
+ * Validate an access token (e.g. from OAuth callback) and return user + token for setting cookie.
+ */
+export async function setSessionByToken(accessToken: string): Promise<LoginSignupResponse | null> {
+  const supabase = getSupabaseClient();
+  const {
+    data: { user: authUser },
+    error,
+  } = await supabase.auth.getUser(accessToken);
+
+  if (error || !authUser) {
+    return null;
+  }
+
+  const user = toUser(
+    authUser.id,
+    authUser.email,
+    authUser.user_metadata as Record<string, unknown> | undefined
+  );
+  return {
+    session: { userId: authUser.id, token: accessToken },
+    user,
+  };
+}

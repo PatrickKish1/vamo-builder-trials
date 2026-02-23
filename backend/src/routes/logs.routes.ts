@@ -43,6 +43,8 @@ interface CrashPayload {
 
 function sanitiseString(val: unknown, maxLen = 4096): string {
   if (typeof val !== "string") return "";
+  // Intentionally strip control characters from log payloads
+  // eslint-disable-next-line no-control-regex
   return val.slice(0, maxLen).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
 }
 

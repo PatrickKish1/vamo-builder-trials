@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import * as rewardService from "../services/reward.service.js";
 import { getSupabaseClientWithAuth } from "../config/supabase.js";
 import { badRequest, unauthorized } from "../utils/errors.js";
+import { getAccessToken } from "../middleware/auth.js";
 
 const ALLOWED_EVENT_TYPES: rewardService.RewardEventType[] = [
   "prompt",
@@ -14,11 +15,6 @@ const ALLOWED_EVENT_TYPES: rewardService.RewardEventType[] = [
 ];
 
 const REDEEM_MINIMUM = 50;
-
-function getAccessToken(req: Request): string | undefined {
-  const authHeader = req.headers.authorization;
-  return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
-}
 
 /**
  * POST /rewards – award pineapples for an event (idempotent).
@@ -80,7 +76,7 @@ export async function getLedger(req: Request, res: Response): Promise<void> {
   const { data, error, count } = await supabase
     .from("reward_ledger")
     .select(
-      "id, event_type, amount, balance_after, project_id, created_at, builder_projects(name)",
+      "id, event_type, reward_amount, balance_after, project_id, created_at, builder_projects(name)",
       { count: "exact" }
     )
     .eq("user_id", req.user.id)
@@ -92,7 +88,14 @@ export async function getLedger(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  res.json({ ledger: data ?? [], total: count ?? 0, page, pageSize });
+  const ledger = (data ?? []).map(
+    (row: { reward_amount: number; [k: string]: unknown }) => {
+      const { reward_amount, ...rest } = row;
+      return { ...rest, amount: reward_amount };
+    }
+  );
+
+  res.json({ ledger, total: count ?? 0, page, pageSize });
 }
 
 /**

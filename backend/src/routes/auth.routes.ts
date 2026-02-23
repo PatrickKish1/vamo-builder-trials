@@ -15,3 +15,6 @@ authRouter.get("/session", (req, res, next) => {
 authRouter.post("/logout", (req, res, next) => {
   authController.logout(req, res).catch(next);
 });
+authRouter.post("/set-session", (req, res, next) => {
+  authController.setSession(req, res).catch(next);
+});

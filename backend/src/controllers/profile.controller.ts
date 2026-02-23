@@ -1,11 +1,8 @@
 import type { Request, Response } from "express";
 import { getSupabaseClientWithAuth } from "../config/supabase.js";
+import { ensureUserAvatar } from "../services/profile.service.js";
 import { unauthorized } from "../utils/errors.js";
-
-function getAccessToken(req: Request): string | undefined {
-  const authHeader = req.headers.authorization;
-  return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
-}
+import { getAccessToken } from "../middleware/auth.js";
 
 export interface ProfileRow {
   id: string;
@@ -48,8 +45,21 @@ export async function getProfile(req: Request, res: Response): Promise<void> {
     return;
   }
 
+  let profile = data as ProfileRow;
+  if (!profile.avatar_url) {
+    const generatedUrl = await ensureUserAvatar(req.user.id, supabase);
+    profile = { ...profile, avatar_url: generatedUrl };
+  }
+
   console.log("[profile] Profile found for user:", req.user.id);
   res.json({
-    profile: data as ProfileRow,
+    profile: {
+      email: profile.email,
+      full_name: profile.full_name,
+      avatar_url: profile.avatar_url,
+      pineapple_balance: profile.pineapple_balance,
+      created_at: profile.created_at,
+      updated_at: profile.updated_at,
+    },
   });
 }

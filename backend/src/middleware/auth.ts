@@ -2,9 +2,21 @@ import type { Request, Response, NextFunction } from "express";
 import { getSupabaseClient } from "../config/supabase.js";
 import type { User } from "../types/api.types.js";
 import { unauthorized } from "../utils/errors.js";
+import { SESSION_COOKIE_NAME } from "../utils/authCookie.js";
+
+/** Prefer cookie (HttpOnly), then Authorization Bearer. Exported for controllers that need the token (e.g. profile). */
+export function getAccessToken(req: Request): string | undefined {
+  const fromCookie =
+    req.cookies && typeof req.cookies[SESSION_COOKIE_NAME] === "string"
+      ? (req.cookies[SESSION_COOKIE_NAME] as string)
+      : undefined;
+  if (fromCookie) return fromCookie;
+  const authHeader = req.headers.authorization;
+  return authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+}
 
 /**
- * Extracts Bearer token and verifies with Supabase; sets req.user.
+ * Extracts token from cookie (preferred) or Bearer header and verifies with Supabase; sets req.user.
  * If no token or invalid token, req.user is null (does not send 401).
  */
 export async function optionalAuth(
@@ -12,12 +24,15 @@ export async function optionalAuth(
   _res: Response,
   next: NextFunction
 ): Promise<void> {
-  const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice(7)
-    : undefined;
+  const fromCookie =
+    req.cookies && typeof req.cookies[SESSION_COOKIE_NAME] === "string";
+  const fromHeader = req.headers.authorization?.startsWith("Bearer ");
+  const token = getAccessToken(req);
 
   if (!token) {
+    if (req.method !== "OPTIONS" && (req.path === "/auth/session" || req.path.startsWith("/builder") || req.path === "/profile")) {
+      console.log("[auth] optionalAuth: no token", req.method, req.path, "cookie:", !!fromCookie, "header:", !!fromHeader);
+    }
     req.user = null;
     next();
     return;
@@ -32,6 +47,9 @@ export async function optionalAuth(
 
     if (error || !authUser) {
       if (error) console.error("[auth] getUser error:", error.message);
+      if (req.method !== "OPTIONS") {
+        console.log("[auth] optionalAuth: token invalid or expired", req.method, req.path, "source:", fromCookie ? "cookie" : "header");
+      }
       req.user = null;
       next();
       return;
@@ -47,8 +65,12 @@ export async function optionalAuth(
         "",
     };
     req.user = user;
+    if (req.method !== "OPTIONS" && (req.path === "/auth/session" || req.path.startsWith("/builder") || req.path === "/profile")) {
+      console.log("[auth] optionalAuth: OK", req.method, req.path, "user:", user.id, "source:", fromCookie ? "cookie" : "header");
+    }
     next();
-  } catch {
+  } catch (err) {
+    console.error("[auth] optionalAuth exception:", err);
     req.user = null;
     next();
   }

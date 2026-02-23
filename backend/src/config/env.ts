@@ -60,8 +60,12 @@ export const env = {
   get e2bApiKey(): string | undefined {
     return getEnvOptional("E2B_API_KEY");
   },
-  /** Supabase Storage bucket name for project logos (private bucket; use signed URLs). 5MB max, image/jpeg, image/jpg, image/png. */
+  /** Supabase Storage bucket name for project logos (private bucket; use signed URLs). 5MB max, image/jpeg, image/jpg, image/png. Set SUPABASE_STORAGE_BUCKET or SUPABASE_LOGO_BUCKET. */
   get supabaseLogoBucket(): string | undefined {
-    return getEnvOptional("SUPABASE_STORAGE_BUCKET");
+    const a = getEnvOptional("SUPABASE_STORAGE_BUCKET");
+    const b = getEnvOptional("SUPABASE_LOGO_BUCKET");
+    const raw = a ?? b;
+    const trimmed = typeof raw === "string" ? raw.trim() : "";
+    return trimmed.length > 0 ? trimmed : undefined;
   },
 } as const;
